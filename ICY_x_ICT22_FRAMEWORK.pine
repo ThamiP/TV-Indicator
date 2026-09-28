@@ -1,7 +1,16 @@
 //@version=6
 // =============================================================================
-// ICY × ICT22 FRAMEWORK v1.1.16  —  clean visual ICT engine display  (NON-GATING)
+// ICY × ICT22 FRAMEWORK v1.1.17  —  clean visual ICT engine display  (NON-GATING)
 // =============================================================================
+// v1.1.17 REVIEW CLEANUP (28 September 2026) · runs on Core v1.0.8 or v1.0.9
+//   * Side column: CISD captions use the same monospace font as every other side caption.
+//   * The Focus grab caption stays on its short grab mark; only live captions join the column.
+//   * HTF key areas join timeframes with "/" (15m/1H +FVG), so " + " never reads as polarity.
+//   * Dealing range captions read DR H / DR EQ / DR L.
+//   * HUD: the structure % row appears only when the score is shown (no "VIEW focus focus").
+//   * Legend lists the current chart language (bull / bear gaps and reactions, DRAW, range, dim).
+//   * Cleanup: one PD context stream, unused tuple values, a dead parent-guard write, the
+//     redundant FVG.touched flag and comments orphaned by the move to Core. Engine unchanged.
 // v1.1.16 NARRATIVE SIDEBAR (27 September 2026) · reuses Core v1.0.8
 //   * Removed the projected HTF candles and their display-only Daily OHLC history.
 //   * Paired HTF engine retained; C1-C4 labels now print on the actual chart candles.
@@ -120,10 +129,9 @@
 //     marks, liquidity-generation ranges, HUD, CISD line visual
 //   ICY_FRAMEWORK v1.0.0                               — narrative outcome engine
 //   ICT22 PRODUCTION v1.3.1 · CISD HTF CONTEXT         — v2.6.0 FVG rendering for
-//     context gaps and HTF FVGs, H/L grouping, CISD+ array map, parent HTF FVGs,
-//     projected HTF candles
+//     context gaps and HTF FVGs, H/L grouping, CISD+ array map, parent HTF FVGs
 //   TTrades "Candle 2 Closure" (C2 / C3 / C4, continuation vs reversal closure,
-//     0.5 equilibrium)                                  — projected-candle tags
+//     0.5 equilibrium)                                  — chart C1-C4 tags
 //   MMXM (market maker buy / sell model)                — side-of-the-curve engine
 //
 // RAW PA ARRAYS (detected on every timeframe; the registry keeps up to 80 recent gaps within
@@ -153,7 +161,8 @@
 //   Delivery marks: Breakaway · Measuring · Exhaustion Gap (light boxes) · IOFED · Propulsion
 //
 // REMOVED (by request)     PD matrix HUD, limit-entry study, session boxes / rails / tags,
-//                          position boxes, Pay the Trader and side-of-the-curve tags
+//                          position boxes, Pay the Trader, side-of-the-curve tags and
+//                          projected HTF candles
 // CHANGED (by request)     every CISD (narrative, parent, CISD+ map) = thin grey line
 //                          + grey label · FVG / iFVG arrays = light boxes, the
 //                          MSS P / D reaction is emphasized · HTF FVGs = grouped key
@@ -219,12 +228,11 @@
 //     inverted delivery gaps can transfer to the opposite narrative; inversion clears stale
 //     entry / P-D styling; a live swing DRAW reserves a slot before nearest-level selection.
 // =============================================================================
-indicator("ICY × ICT22 FRAMEWORK v1.1.16", shorttitle = "ICY×22", overlay = true, scale = scale.none, max_bars_back = 5000, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500, max_polylines_count = 100)
+indicator("ICY × ICT22 FRAMEWORK v1.1.17", shorttitle = "ICY×22", overlay = true, scale = scale.none, max_bars_back = 5000, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500, max_polylines_count = 100)
 
-// Requires the SAME Core v1.0.8 publication used by Framework v1.1.15; no Core update.
-// Keep your working username/publication number in the import below. /2 is the
-// configured publication in the supplied v1.1.15 source, not the semantic version.
-// Price objects force the main pane's scale.
+// Runs on the existing Core v1.0.8 publication (/2). Core v1.0.9 is an optional cleanup with the
+// same exports this script uses; after publishing it, raise the publication number below.
+// /2 is a publication number, not the semantic version. Price objects force the main pane's scale.
 import ThamiP/ICYFrameworkCore/2 as core
 
 
@@ -562,7 +570,7 @@ bool   i_pdChain = input.bool(true, "Track ordered OB -> breaker -> BPR -> FVG s
 // Full help (i_pdChainGate): Experimental compulsory sequence. Original OB must be the breaker's parent; each later stage requires a later source candle. Raw arrays and reversal mapping stay visible.
 bool   i_pdChainGate = input.bool(false, "Require full chain for CONT", group = GRP_LAB, tooltip = "Requires ancestor OB, own BB, then later BPR/FVG candles. Experimental.")
 // Full help (i_pdScore): A deterministic checklist percentage, NOT a probability or win rate. Same-impulse FVG/BISI/CE/OB features may be shown in the raw count; the unique count groups them by source impulse; these are not statistically independent observations.
-bool   i_pdScore = input.bool(true, "Structure percentage + raw / unique impulse counts", group = GRP_LAB, tooltip = "Checklist %, NOT win probability. Impulse groups are not independent evidence.")
+bool   i_pdScore = input.bool(true, "Structure percentage + raw / unique impulse counts", group = GRP_LAB, tooltip = "HUD row in All arrays view (Focus off). Checklist %, NOT win probability. Impulse groups are not independent evidence.")
 string i_pdScoreMode = input.string("Structure", "Score display", options = ["Structure", "Raw confluence"], group = GRP_LAB)
 // Full help (i_pdEarlyExh): Uses only information available now: extended delivery plus an opposing rejection wick. EXH? is provisional; a later close through its opposite extreme confirms response. New extension invalidates it. Separate from post-draw exhaustion.
 bool   i_pdEarlyExh = input.bool(true, "Early exhaustion candidates and follow-through", group = GRP_LAB, tooltip = "Stretch + rejection wick. Later opposite break confirms; extension invalidates.")
@@ -605,23 +613,9 @@ int EV_CONT  = 12
 string SZ  = core.f_size(i_lblSz)
 string FSZ = core.f_size(i_fvgSz)
 
-// Every xloc.bar_index anchor is clamped inside the history buffer (RE10143 guard).
-
-// Drawing factories keep the large built-in default-argument lists at one call site.
-
-// TTrades C2 closure (reversal closure). dir +1 = low swept / bullish; -1 = high swept / bearish.
-// Canonical C3 closure: C2 closed through C1, C3 preserves the C2 extreme and closes back beyond the C2 body.
-// Continuation vs reversal closure of candle b against candle a (TTrades "Candle 2 Closure").
-//   CONT: b closes beyond a's extreme in the direction it traded.
-//   REV : b trades through a's extreme and closes back inside a's range.
 // =============================================================================
-// 3 · TYPES
+// 3 · TYPES  (swing levels, HTF gaps, PD arrays and CISD map types live in Core)
 // =============================================================================
-// Swing liquidity level (ICT22 registry). dir +1 high / -1 low · state 0 live · 1 taken
-// src 1 = HTF1 swing: drawn, arms grabs, can be the draw · 2 = HTF2 swing: never drawn on its
-// own, only grouped into a nearby HTF1 swing's label. Taken HTF1 levels are the grab events.
-// HTF FVG (parent-candle built for HTF1, completed-candle pack for HTF2)
-// state 0 fresh · 1 tapped · 2 invalid
 // Aggregated parent (HTF1) candle
 type PCandle
     int    t
@@ -634,7 +628,6 @@ type PCandle
     int    hiBar
     int    loBar
 
-// CISD+ map (Distilled donor engine)
 // Liquidity generation / accumulation range tracker
 type Acc
     bool   on = false
@@ -730,8 +723,6 @@ type Seq
     array<box>      B
     array<polyline> P
 
-// One CISD anchor offered to the unified CISD renderer (last bar only).
-// pri: 21 parent confirmed · 20 parent forming · 10 + si CISD+ ladder · 5 live narrative
 // Chart-TF fair value gap. state 0 fresh · 1 mitigated · 2 inverted (iFVG) · 3 dead
 // role 0 plain · 1 entry · 2 delivery · 3 iFVG of a narrative
 // sty (drawn role) 0 none · 1 context box (raw / delivery / narrative iFVG) · 2 selected box
@@ -744,7 +735,6 @@ type FVG
     int    origin = na          // timestamp of the middle candle; same identity as the PD FVG
     int    state    = 0
     int    role     = 0
-    bool   touched  = false
     int    touchIdx
     int    invIdx
     int    killIdx
@@ -919,7 +909,7 @@ var int   parentCisdDir = 0
 var float parentCisdLevel = na
 var int   parentCisdFrom = na
 var int   parentCisdSeq = na
-var float parentCisdGuard = na
+var float parentCisdGuard = na   // engine-off path only; with the PD engine, Core guards pdS1
 // Latest completed opposite-colour parent run. Its open is the PENDING anchor of the
 // opposite CISD and survives intervening candles until a parent close confirms it,
 // a newer run replaces it, or it goes stale (i_pendMax parent candles after the run).
@@ -1002,6 +992,11 @@ core.PDStream pdS0 = array.get(pdStreams, 0)
 core.PDStream pdS1 = array.get(pdStreams, 1)
 core.PDStream pdS2 = array.get(pdStreams, 2)
 pdCfg.pdS0 := pdS0
+// Context stream for flow, range, CONT, score and exhaustion: HTF1 (or the Daily fallback) when present.
+core.PDStream pdContext = pdHasParent ? pdS1 : pdS0
+// hls: swing levels (dir +1 BSL / -1 SSL; state 0 live / 1 taken; src 1 HTF1 draws, arms grabs and
+// can be the draw, src 2 HTF2 only joins a nearby HTF1 label). pfvgs: HTF key areas (state 0 fresh /
+// 1 tapped / 2 invalid).
 array<core.HLvl> hls = pdCfg.hls
 array<core.PFvg> pfvgs = pdCfg.pfvgs
 var array<box> pdZoneBoxes = array.new<box>(12, na)
@@ -1035,10 +1030,7 @@ f_fzBox(box b) =>
         if array.size(fzBox) > CAP_FZ_BOX
             box.delete(array.shift(fzBox))
 
-// ── swing liquidity registry (ICT22 owners + clustering) ─────────────────────
-// 3-candle swing on the MIDDLE candle (external liquidity). Strict against the left neighbour,
-// inclusive against the right one, so the first candle of an equal pair owns the level.
-
+// ── swing liquidity slot: one HTF1 swing line with its clustered label ──────────
 f_drawHLSlot(int slot, int idx, float tol, float tol2, float dolPx, int dolDir, bool isDraw) =>
     line outL = array.get(hlLn, slot)
     label outB = array.get(hlLb, slot)
@@ -1126,7 +1118,7 @@ f_drawPFvgSlot(int slot, core.PFGroup g, array<string> pins, float hlTol) =>
             relation := h.price >= z.bot and h.price <= z.top ? "at " : zoneDir == 1 ? "below " : "above "
             relation += zoneDir == 1 ? "SSL" : "BSL"
             pool := "\nH/L relation: " + relation + " · " + hn + " @ " + str.tostring(h.price, format.mintick) + ". Location context only."
-        string caption = array.join(tags, " + ") + (zoneDir == 1 ? " +" : " -") + zoneKind + " · KEY" + (n > 1 ? " ×" + str.tostring(n) : "") + (relation != "" ? " · " + relation : "") + (grey ? " · TAP" : tapped > 0 ? " · mixed tests" : "") + (draw ? " · DRAW" : "")
+        string caption = array.join(tags, "/") + (zoneDir == 1 ? " +" : " -") + zoneKind + " · KEY" + (n > 1 ? " ×" + str.tostring(n) : "") + (relation != "" ? " · " + relation : "") + (grey ? " · TAP" : tapped > 0 ? " · mixed tests" : "") + (draw ? " · DRAW" : "")
         ot := core.f_label(ot, bar_index + i_right + 1, mid, caption, color.new(base, 25), label.style_label_left, size.tiny)
         label.set_tooltip(ot, "HTF " + zoneKind + " key area for ERL / IRL context. H/L pools supply external liquidity context; this is not an entry or a mandatory ERL→IRL sequence.\nOutline / C.E.: " + core.f_pfName(z) + " at its original bounds.\n" + (n > 1 ? "Shared intersection: " + str.tostring(g.overlapBot, format.mintick) + "–" + str.tostring(g.overlapTop, format.mintick) + ". No union of the members; overlap is one location, not independent confirmations." : "Single confirmed formation.") + pool + "\nMembers:" + detail + "\nTouches only mark a tap. A completed owner-timeframe close through the far edge flips an FVG into an iFVG; failure of that inverse retires it. Original DRAW pins never transfer to the inverse.")
     else
@@ -1164,8 +1156,7 @@ f_focusKind(core.PDArr a) =>
 // ── PD engine: confirmed source-candle events; drawings never own logic ───────
 f_pdAllowed(int d) =>
     bool smt = not i_pdSmtGate or (i_pdSmt and pdSmtDir == d and not na(pdSmtAt) and bar_index - pdSmtAt <= i_pdFlowAge)
-    core.PDStream context = pdHasParent ? pdS1 : pdS0
-    bool chain = not i_pdChainGate or (i_pdChain and (d == 1 ? context.chainB : context.chainS) == 4)
+    bool chain = not i_pdChainGate or (i_pdChain and (d == 1 ? pdContext.chainB : pdContext.chainS) == 4)
     smt and chain
 
 // nearest eligible observed draw, independently of the nearest-obstacle readout.
@@ -1185,7 +1176,7 @@ f_findDraw(int d, float need) =>
                 best := l.price
                 bi   := i
     if bi >= 0
-        [cn, cb, cd] = core.f_hlCluster(pdCfg, bi, atrS * i_hlClusterAtr, atrS * i_h2Near, float(na), 0)
+        [cn, _, _] = core.f_hlCluster(pdCfg, bi, atrS * i_hlClusterAtr, atrS * i_h2Near, float(na), 0)
         nm  := cn
         knd := "SWING"
     for z in pfvgs
@@ -1959,8 +1950,6 @@ f_newSeq(int d, float px, string nm, int kind, int id, int pix) =>
 // =============================================================================
 f_cmTag(int si) => array.get(cMapStreams, si).tag
 
-// CISD leg FVG + BPR are known one stream candle later.
-// One textual f_cmClose call: pass 0 closes a stream candle the end test missed, pass 1 closes on the end.
 // ── parent stream ────────────────────────────────────────────────────────────
 f_updateLive(PCandle c) =>
     c.c := close
@@ -1993,10 +1982,8 @@ f_pdMark(int d, string markText, color col) =>
 
 f_pdStudy() =>
     if i_pdEngine and cf
-        if i_pdEarlyExh
-            core.PDStream cx = pdHasParent ? pdS1 : pdS0
-            if cx.exhPulse != 0
-                f_pdMark(cx.exhPulse > 0 ? 1 : -1, cx.tag + (math.abs(cx.exhPulse) == 1 ? " EXH?" : " EXH response"), C_XMARK)
+        if i_pdEarlyExh and pdContext.exhPulse != 0
+            f_pdMark(pdContext.exhPulse > 0 ? 1 : -1, pdContext.tag + (math.abs(pdContext.exhPulse) == 1 ? " EXH?" : " EXH response"), C_XMARK)
     true
 
 // =============================================================================
@@ -2239,7 +2226,6 @@ if i_pdEngine and cf
 if cf and i_pdEngine and pdHasParent
     parentCisdDir := pdS1.cisDir
     parentCisdLevel := pdS1.cisLevel
-    parentCisdGuard := pdS1.cisGuard
     parentCisdFrom := pdS1.cisFrom
     parentCisdSeq := pdS1.cisSeq
     pendBullLvl := pdS1.dnArmed and pdS1.seq + 1 - pdS1.dnEnd <= i_pendMax ? pdS1.dnOpen : na
@@ -2304,10 +2290,9 @@ if cf
 if cf
     pdContSignal := 0
     if i_cont and i_pdEngine
-        core.PDStream context = pdHasParent ? pdS1 : pdS0
-        int d = context.cont
-        bool localShift = d != 0 and pdS0.cisDir == d and not na(pdS0.cisBar) and pdS0.cisBar >= context.contBar
-        core.PDArr localArray = d != 0 ? core.f_pdEntry(pdCfg, d, nz(context.contBar, bar_index), true) : na
+        int d = pdContext.cont
+        bool localShift = d != 0 and pdS0.cisDir == d and not na(pdS0.cisBar) and pdS0.cisBar >= pdContext.contBar
+        core.PDArr localArray = d != 0 ? core.f_pdEntry(pdCfg, d, nz(pdContext.contBar, bar_index), true) : na
         bool qualify = d != 0 and (i_pdCont == "Response" or (localShift and (i_pdCont != "Response + local CISD + FVG" or (not na(localArray) and (localArray.kind == "FVG" or localArray.kind == "iFVG")))))
         if qualify and f_pdAllowed(d)
             pdContSignal := d
@@ -2360,7 +2345,7 @@ if cf and nHL > 0
                 bool qualifies = i_sweep == "Any Breach" or (l.dir == 1 ? close < l.price : close > l.price)
                 if selected and qualifies
                     int seedK = l.dir == 1 ? (k == hiSel1 ? hiSel1 : hiSel2) : (k == loSel1 ? loSel1 : loSel2)
-                    [cn, cb, cd] = core.f_hlCluster(pdCfg, seedK, hlTol, hlTol2, float(na), 0)
+                    [cn, _, _] = core.f_hlCluster(pdCfg, seedK, hlTol, hlTol2, float(na), 0)
                     if l.dir == 1
                         if na(evBslPx) or l.price > evBslPx
                             evBslPx := l.price
@@ -2406,7 +2391,6 @@ if cf and nF > 0
                 bool touch = f.dir == 1 ? low <= f.top : high >= f.bot
                 if touch
                     f.state    := 1
-                    f.touched  := true
                     f.touchIdx := bar_index
                     f_fvgEdge(f, bar_index)
                     bool shallow = f.dir == 1 ? low > ce : high < ce
@@ -2445,7 +2429,7 @@ if cf and nF > 0
 // for i_bgBars breaks away, later ones measure (ICY). Marks never appear on a resolved narrative.
 if cf and i_bg
     for f in fvgs
-        if f.role == 2 and f.sib and not f.touched and not f.bg and not f.mg and bar_index - f.born >= i_bgBars and not na(f.owner)
+        if f.role == 2 and f.sib and f.state == 0 and not f.bg and not f.mg and bar_index - f.born >= i_bgBars and not na(f.owner)
             Seq ob = f.owner
             if not ob.dead and ob.stage <= 4 and ob.nBg < MAX_MARKS
                 if ob.nBg == 0
@@ -2544,13 +2528,6 @@ f_pdStudy()
 // =============================================================================
 // 10 · LAST BAR — context renderer, on-chart C-sequence, HUD, legend
 // =============================================================================
-// Resolve ownership before applying the visible-line budget. Each cluster is
-// centered on its final owner, so all retained owner levels are farther apart
-// than tol, including clusters whose anchors have opposite directions.
-// Narrative lines keep their short extension when standalone. If they overlap
-// an actually drawn context owner, hide them regardless of direction or their
-// earlier cluster assignment. Of two overlapping standalone narratives, keep
-// the more recent shift (sequence ID breaks an equal-bar tie).
 f_findParent(int seq) =>
     PCandle out = na
     if not na(live) and live.seq == seq
@@ -2922,8 +2899,7 @@ f_pdZones() =>
                 mid := core.f_timeLine(mid, best.origin, zoneEnd, midpoint, color.new(col, 45), ST_ZONEMID, W_ZONE)
             string zoneText = (i_focus and not bestRelated ? "PA · " : "") + core.f_pdName(pdCfg, best) + " · " + core.f_pdState(best.state)
             tag := core.f_label(tag, bar_index + (i_focus ? 7 : i_right + 1), midpoint, zoneText, color.new(col, i_focus ? 45 : 0), label.style_label_left, size.tiny)
-            core.PDStream parent = pdHasParent ? pdS1 : pdS0
-            label.set_tooltip(tag, core.f_pdTip(pdCfg, best, i_tz) + "\nHTF range: " + core.f_pdRangeLoc(parent, best.top, best.bot) + (i_focus ? "\nSupporting midpoint; bounds above are unchanged." : ""))
+            label.set_tooltip(tag, core.f_pdTip(pdCfg, best, i_tz) + "\nHTF range: " + core.f_pdRangeLoc(pdContext, best.top, best.bot) + (i_focus ? "\nSupporting midpoint; bounds above are unchanged." : ""))
         else
             hi := core.f_hideLine(hi)
             lo := core.f_hideLine(lo)
@@ -2937,20 +2913,20 @@ f_pdZones() =>
         array.set(pdZoneLabels, slot, tag)
     true
 
-f_pdRangeDraw(core.PDStream context) =>
+f_pdRangeDraw() =>
     array<float> fibs = array.from(0.25, 0.62, 0.705, 0.79, 1.272, 1.618)
     for slot = 0 to 8
         line ln = array.get(pdRangeLines, slot)
         label lb = array.get(pdRangeLabels, slot)
-        bool valid = i_pdEngine and not na(context.rangeHi) and (slot < 3 ? i_pdRange : not i_focus and i_pdFib)
+        bool valid = i_pdEngine and not na(pdContext.rangeHi) and (slot < 3 ? i_pdRange : not i_focus and i_pdFib)
         if valid
             float ratio = slot < 3 ? (slot == 0 ? 1.0 : slot == 1 ? 0.5 : 0.0) : array.get(fibs, slot - 3)
-            float px = context.rangeLo + ratio * (context.rangeHi - context.rangeLo)
-            string labelText = context.tag + (slot == 0 ? " DR H" : slot == 1 ? " range EQ" : slot == 2 ? " DR L" : " Fib " + str.tostring(ratio))
+            float px = pdContext.rangeLo + ratio * (pdContext.rangeHi - pdContext.rangeLo)
+            string labelText = pdContext.tag + (slot == 0 ? " DR H" : slot == 1 ? " DR EQ" : slot == 2 ? " DR L" : " Fib " + str.tostring(ratio))
             color col = color.new(slot < 3 ? C_GOLD : C_FIB, i_focus ? 65 : slot == 1 ? 0 : slot < 3 ? 25 : 55)
-            ln := core.f_line(ln, core.f_past(context.rangeKnown), px, bar_index + i_right, px, col, slot < 3 ? ST_RANGE : ST_FIB, slot < 3 ? W_RANGE : W_FIB)
+            ln := core.f_line(ln, core.f_past(pdContext.rangeKnown), px, bar_index + i_right, px, col, slot < 3 ? ST_RANGE : ST_FIB, slot < 3 ? W_RANGE : W_FIB)
             lb := core.f_label(lb, bar_index + i_right + 1, px, labelText, col, label.style_label_left, size.tiny)
-            label.set_tooltip(lb, "Locked confirmed-swing range. Known at chart bar " + str.tostring(context.rangeKnown) + ". " + (na(context.rangeBreak) ? "Inside active range." : "Range broken; waiting for two new confirmed anchors.") + " Fib = range fractions.")
+            label.set_tooltip(lb, "Locked confirmed-swing range. Known at chart bar " + str.tostring(pdContext.rangeKnown) + ". " + (na(pdContext.rangeBreak) ? "Inside active range." : "Range broken; waiting for two new confirmed anchors.") + " Fib = range fractions.")
         else
             ln := core.f_hideLine(ln)
             lb := core.f_hideLabel(lb)
@@ -2986,12 +2962,14 @@ f_pdObstacles() =>
 
 f_pdExtraHud(table t) =>
     if i_hud and i_pdEngine
-        core.PDStream context = pdHasParent ? pdS1 : pdS0
-        [rawB, independentB] = core.f_pdCounts(pdCfg, 1)
-        [rawS, independentS] = core.f_pdCounts(pdCfg, -1)
+        // the structure checklist is an All arrays readout; Focus leaves its row out
+        bool showScore = i_pdScore and not i_focus
         core.f_cell(t, 0, 14, "OBSTACLE", C_SHIFT)
         core.f_cell(t, 0, 15, "DRAW TYPE", C_TXT)
-        core.f_cell(t, 0, 16, i_pdScore and not i_focus ? "STRUCTURE %" : "VIEW", C_TXT)
+        if showScore
+            core.f_cell(t, 0, 16, "STRUCTURE %", C_TXT)
+        else
+            table.clear(t, 0, 16, 2, 16)
         if i_pdSmt
             core.f_cell(t, 0, 17, "SMT", C_TXT)
         else
@@ -3000,12 +2978,12 @@ f_pdExtraHud(table t) =>
             int d = side == 0 ? 1 : -1
             Seq narr = side == 0 ? bullSeq : bearSeq
             core.PDArr obst = core.f_pdNear(pdCfg, d, close, true, -1)
-            int raw = side == 0 ? rawB : rawS
-            int independent = side == 0 ? independentB : independentS
-            int score = i_pdScoreMode == "Raw confluence" ? math.min(100, raw * 10) : core.f_pdScore(pdCfg, d, context, atrS)
             core.f_tipCell(t, side + 1, 14, core.f_pdName(pdCfg, obst), "No minimum-R filter; " + (na(obst) ? "none tracked" : core.f_pdState(obst.state)), C_SHIFT)
             core.f_tipCell(t, side + 1, 15, na(narr) ? "—" : narr.drawKind, "Target source: swing, array, origin or projection.", #D1D4DC)
-            core.f_tipCell(t, side + 1, 16, i_focus ? "focus" : i_pdScore ? str.tostring(score) + "% " + str.tostring(raw) + "/" + str.tostring(independent) : "all arrays", "NOT probability. Checklist; raw / impulse groups. Groups are not independent.", #D1D4DC)
+            if showScore
+                [raw, independent] = core.f_pdCounts(pdCfg, d)
+                int score = i_pdScoreMode == "Raw confluence" ? math.min(100, raw * 10) : core.f_pdScore(pdCfg, d, pdContext, atrS)
+                core.f_tipCell(t, side + 1, 16, str.tostring(score) + "% " + str.tostring(raw) + "/" + str.tostring(independent), "NOT probability. Checklist; raw / impulse groups. Groups are not independent.", #D1D4DC)
             if i_pdSmt
                 bool smtAligned = pdSmtDir == d and not na(pdSmtAt) and bar_index - pdSmtAt <= i_pdFlowAge
                 core.f_tipCell(t, side + 1, 17, smtAligned ? "✓ aligned" : "—", "Confirmed SMT on this side within the response window. CONT study gates: " + (f_pdAllowed(d) ? "pass" : "blocked") + ". Raw arrays are unaffected.", C_TXT)
@@ -3014,7 +2992,7 @@ f_pdExtraHud(table t) =>
     true
 
 var table hud = table.new(core.f_pos(i_hudPos), 3, 18, bgcolor = color.new(#131722, 8), frame_color = #434651, frame_width = 1, border_color = #2A2E39, border_width = 1)
-var table leg = table.new(core.f_pos(i_legPos), 2, 11, bgcolor = color.new(#131722, 8), frame_color = #434651, frame_width = 1, border_color = #2A2E39, border_width = 1)
+var table leg = table.new(core.f_pos(i_legPos), 2, 16, bgcolor = color.new(#131722, 8), frame_color = #434651, frame_width = 1, border_color = #2A2E39, border_width = 1)
 
 if barstate.islast
     int edge = bar_index + i_right
@@ -3060,6 +3038,10 @@ if barstate.islast
     // ── CISD: parent (confirmed / forming) + CISD+ ladder + live narrative CISDs in ONE renderer.
     // Anchors within tolerance form one cluster, drawn at the HIGHEST-timeframe owner's level:
     // parent confirmed 21 > parent forming 20 > CISD+ ladder 12/11/10 > live narrative 5.
+    // Each cluster is centred on its final owner before the per-side line budget, so retained
+    // owners sit farther apart than tol whatever their direction. A standalone narrative keeps its
+    // own short line; one inside a drawn owner's cluster is hidden, and of two overlapping
+    // standalone narratives the more recent shift stays (sequence ID breaks an equal-bar tie).
     while array.size(cisdNestLines) > 0
         line.delete(array.pop(cisdNestLines))
     while array.size(cisdNestLabels) > 0
@@ -3120,7 +3102,7 @@ if barstate.islast
         color cc = tk.pri >= 20 ? C_PCISD : tk.pri >= 10 ? C_MCISD : C_NCISD
         string cs = tk.dashed ? line.style_dashed : tk.pri >= 20 ? ST_PCISD : tk.pri >= 10 ? ST_MCISD : ST_NCISD
         array.push(cisdNestLines, core.f_newLine(core.f_past(lft), tk.lvl, edge, tk.lvl, color.new(cc, tk.dashed ? 45 : 0), cs, tk.pri >= 20 ? W_PCISD : tk.pri >= 10 ? W_MCISD : W_NCISD, false))
-        array.push(cisdNestLabels, core.f_newLabel(edge + 1, tk.lvl, txt, label.style_label_left, NOCOL, color.new(cc, tk.dashed ? 35 : 0), size.tiny, tip, false))
+        array.push(cisdNestLabels, core.f_newLabel(edge + 1, tk.lvl, txt, label.style_label_left, NOCOL, color.new(cc, tk.dashed ? 35 : 0), size.tiny, tip, true))
     array<int> hidden = core.f_cisdHiddenNarratives(ks, picks, tolC)
     // Restore any standalone narrative; only a visible winning line may absorb it.
     for q = 0 to 1
@@ -3158,8 +3140,7 @@ if barstate.islast
             if bestA >= 0
                 array.push(actIx, bestA)
                 FVG fb = array.get(fvgs, bestA)
-                core.PDStream context = pdHasParent ? pdS1 : pdS0
-                bool arrayAfterResponse = not i_pdEngine or i_pdCont == "Legacy body 50%" or (not na(context.contBar) and fb.born >= context.contBar)
+                bool arrayAfterResponse = not i_pdEngine or i_pdCont == "Legacy body 50%" or (not na(pdContext.contBar) and fb.born >= pdContext.contBar)
                 if rep == 1 and arrayAfterResponse and contDir == pol and ((i_pdEngine and i_pdCont != "Legacy body 50%") or (not na(contMid) and (pol == 1 ? fb.top >= contMid : fb.bot <= contMid)))
                     contIx  := bestA
                     contArr := (pol == 1 ? "+" : "-") + (fb.state >= 2 ? "iFVG" : "FVG")
@@ -3276,21 +3257,14 @@ if barstate.islast
     if i_legend
         table.cell(leg, 0, 0, "", bgcolor = #1E222D, text_size = size.tiny)
         table.cell(leg, 1, 0, "LEGEND", text_color = #D1D4DC, bgcolor = #1E222D, text_size = size.tiny, text_halign = text.align_left)
-        core.f_swatch(leg, 1, C_ACC, "Liquidity Generation")
-        core.f_swatch(leg, 2, C_FVGB, "Light FVG boxes (BISI / SIBI)")
-        core.f_swatch(leg, 3, C_IFVG, "Light iFVG boxes")
-        core.f_swatch(leg, 4, C_ARRB, "MSS P / D: bull green · bear red")
-        core.f_swatch(leg, 5, C_BG, "Breakaway · Measuring Gap")
-        core.f_swatch(leg, 6, C_EXH, "Exhaustion Gap")
-        core.f_swatch(leg, 7, C_OB, "CISD · OB · Breaker lines")
-        core.f_swatch(leg, 8, C_CONT, "Previous HTF body 50% (context)")
-        core.f_swatch(leg, 9, C_HTF, "HTF FVG")
-        core.f_swatch(leg, 10, C_LIQ, "HTF1 swing BSL / SSL")
+        array<color> legInk = array.from(C_LIQ, C_HTF, C_FVGB, C_FVGS, C_IFVG, C_ARRB, C_ARR, C_BG, C_EXH, C_OB, C_DRAW, C_CONT, C_GOLD, C_ACC, C_DIM)
+        array<string> legTxt = array.from("HTF1 swing BSL / SSL", "HTF FVG key area", "Bull FVG (BISI)", "Bear FVG (SIBI)", "iFVG", "Bull MSS P / D reaction", "Bear MSS P / D reaction", "Breakaway · Measuring Gap", "Exhaustion Gap", "CISD · OB · Breaker lines", "DRAW", "Previous HTF body 50%", "Dealing range · Fib", "Liquidity Generation", "Focus study colour (dim)")
+        for row = 0 to array.size(legTxt) - 1
+            core.f_swatch(leg, row + 1, array.get(legInk, row), array.get(legTxt, row))
 
 if barstate.islast
-    core.PDStream context = pdHasParent ? pdS1 : pdS0
     f_pdZones()
-    f_pdRangeDraw(context)
+    f_pdRangeDraw()
     f_pdObstacles()
     f_pdExtraHud(hud)
     f_focusPrimary()
@@ -3300,7 +3274,9 @@ if barstate.islast
     core.f_sideCollect(sideTags, hlLb)
     core.f_sideCollect(sideTags, pfLb)
     core.f_sideCollect(sideTags, cisdNestLabels)
-    core.f_sideCollect(sideTags, focusLabels)
+    // Focus slot = side * 5 + role: roles 1-4 only. The grab caption (role 0) stays on its short mark.
+    core.f_sideCollect(sideTags, array.slice(focusLabels, 1, 5))
+    core.f_sideCollect(sideTags, array.slice(focusLabels, 6, 10))
     core.f_sideCollect(sideTags, pdZoneLabels)
     core.f_sideCollect(sideTags, pdRangeLabels)
     core.f_sideCollect(sideTags, pdObstLabels)
@@ -3347,7 +3323,6 @@ alertcondition(array.get(ev, EV_CONT), "Bull continuation armed", "ICY×22: bull
 alertcondition(array.get(ev, EV_CONT + 1), "Bear continuation armed", "ICY×22: bearish continuation qualified by the selected CONT mode")
 
 // Expanded diagnostics: checklist scores are not confidence probabilities.
-core.PDStream pdContext = pdHasParent ? pdS1 : pdS0
 plot(i_pdEngine ? pdContext.flow : na, "X_PD_flow (2 range / 3 mixed)", display = display.data_window)
 plot(i_pdEngine ? pdContSignal : na, "X_PD_causal_CONT", display = display.data_window)
 plot(i_pdEngine ? pdContext.rangeHi : na, "X_PD_range_high", display = display.data_window)

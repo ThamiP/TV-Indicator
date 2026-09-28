@@ -1,0 +1,1680 @@
+//@version=6
+//@description Shared PD response, CISD and drawing engine for ICY x ICT22 Framework v1.1.15 (Core v1.0.8). Publish privately as ICYFrameworkCore (as a new version if an earlier Core is already published) before importing it into the main indicator.
+library("ICYFrameworkCore", overlay = true)
+
+// Core v1.0.8 (HTF inversion lifecycle and side-label layout, for Framework v1.1.15)
+//   * HTF key gaps invert once on a completed owner close; the inverse can then fail.
+//   * Original geometry/identity retained; inverse DRAW pins and grouping are distinct.
+//   * Side labels use minimum spacing and connectors without changing any price level.
+// Core v1.0.7 (compiled size, for Framework v1.1.13)
+//   * Display and selection helpers move here from the indicator, unchanged apart from taking
+//     the indicator's globals as parameters: HUD / legend cells, line-style setting, curve arc
+//     points, zone time line, PD array tooltip, structure score, swing picks / cluster names and
+//     HTF key-area picks. Imported code does not count toward the indicator's compiled size.
+// Core v1.0.6 (review fixes, for Framework v1.1.10)
+//   * Breaker provenance is seeded on every stream, so HTF1 / HTF2 breakers can qualify too
+//     (previously only chart-stream OBs were tested and every HTF breaker read "OB flip").
+//   * PDBar.b0: first chart bar of the owner candle. HTF CISD anchors use it, so a Daily
+//     fallback CISD starts on its own candle instead of the next day's first bar.
+// Core v1.0.5 (HTF FVG key levels, for Framework v1.1.9)
+//   * Exact source/formation identities keep lifecycle state on repeated detection.
+//   * Each HTF retains its own bounded registry; only its own close invalidates it.
+//   * Same-polarity groups retain original owner bounds and a common intersection.
+//     Grouping is display metadata: it never changes entry, response or draw rules.
+//   * Non-integral-hour timeframe labels preserve their exact minute count.
+// Core v1.0.4 (array provenance, for Framework v1.1.8)
+//   * Failed OBs retain their response identity. Only a recorded prior swing sweep
+//     followed by a later displacement close through structure earns the BB caption.
+//   * Original qualification, activation and sweep/break evidence remain separate.
+//   * These fields are descriptive: response, flow, chain and target rules are retained.
+// Core v1.0.3 (chart cleanup, for Framework v1.1.7)
+//   * All price drawing factories force the main chart pane and its price scale.
+//   * Removed the limit-study type, functions and configuration fields.
+//   * Removed text fields used only by the retired PD matrix HUD.
+// Core v1.0.2 (review fixes, for Framework v1.1.5)
+//   * BPR identity uses both contributing FVG timestamps; an exact formation keeps its lifecycle.
+//   * HTF CISD retains its run-start anchor and full protected extreme. Only a completed
+//     source candle releases it; invalidation clears the complete confirmed state.
+// Core v1.0.1 (review cleanup, for Framework v1.1.4)
+//   * PDArr.obBar: chart-stream bar of the order-block candle; role flips inherit it, so the
+//     narrative OB / breaker lines start on the order-block candle.
+//   * PDConfig.narrOb / narrBrk: the chart stream records OBs and breakers whenever the indicator's
+//     narratives read them, independent of the expanded-zone detector toggles.
+//   * One child path for role flips (FVG -> iFVG, OB -> BB, BB -> ROB?).
+//   * Removed never-read fields: PDArr.eventBar, PDStream hiT / loT / rangeT / flowFrom / lastCont,
+//     PDLimit.key.
+
+// Imported code compiles separately. Every registry belongs to the caller; there
+// is no hidden mutable global state, input, request or order execution here.
+// Original donor attribution and model notes remain in the main indicator.
+const color NOCOL = #00000000
+
+export type HLvl
+    float  price
+    int    dir
+    string name
+    int    bornBar
+    int    state = 0
+    int    src   = 1
+export type PFvg
+    float  top
+    float  bot
+    int    dir
+    int    t0
+    string tf
+    int    state = 0
+    int    conf         // last chart bar of the HTF candle that completed the gap; taps count after it
+    int    src = 0      // 1 HTF1 / 2 HTF2; display labels never identify an owner
+    int    known = na   // chart bar at which the completed formation was registered
+    int    invertedAt = na // confirmed owner-close inversion; original dir / bounds / anchor stay immutable
+export type PFGroup
+    PFvg owner
+    array<PFvg> members
+    float overlapTop
+    float overlapBot
+    int overlapFrom
+export type CMapCis
+    int    id
+    int    si
+    int    dir
+    float  lvl
+    int    fromB
+    int    atB
+    float  ext
+    bool   tested = false
+export type CMapArr
+    int    cid
+    int    dir
+    int    kind
+    int    si
+    float  top
+    float  bot
+export type CMapStrm
+    int    si
+    string tag
+    bool   act  = false
+    bool   live = false
+    float  fo = na
+    float  fh = na
+    float  fl = na
+    float  fc = na
+    int    fB = na
+    array<float> O
+    array<float> H
+    array<float> L
+    array<float> C
+    array<int>   SB
+    int    seq = 0
+    int    prevBody = 0
+    float  dnOpen = na
+    int    dnSeq = na
+    int    dnEnd = na
+    bool   dnArm = false
+    float  upOpen = na
+    int    upSeq = na
+    int    upEnd = na
+    bool   upArm = false
+    int    pBK = na
+    int    pBE = na
+    int    pB0 = na
+    int    pBC = na
+    int    pSK = na
+    int    pSE = na
+    int    pS0 = na
+    int    pSC = na
+export type CisdK
+    float  lvl
+    int    dir
+    int    pri
+    int    fromB
+    string name
+    string tags
+    bool   dashed = false
+    int    seqId  = 0
+    int    cl     = -1
+    int    rec    = 0      // recency (bar) - breaks ties between equal owners
+export type PDArr
+    int id
+    int src
+    string kind
+    int dir
+    float top
+    float bot
+    int origin
+    int known
+    int bornSeq
+    int impulse
+    int parentId = 0
+    int contextId = 0
+    int state = 0
+    int testedSeq = na
+    int rejectSeq = na
+    float rejectHi = na
+    float rejectLo = na
+    int eventSeq = na
+    int eventContext = 0
+    int touches = 0
+    float depth = 0
+    bool inTest = false
+    bool sib = false
+    float mt = na
+    int obBar = na          // chart stream: bar of the order-block candle (OB and its role flips)
+    int pairOrigin = na     // BPR: opposing FVG timestamp; origin identifies the new FVG
+    int firstKnown = na     // original qualification bar; role flips inherit this
+    int poolId = 0          // confirmed source swing that existed by the OB candle
+    float poolPx = na
+    int raidSeq = na        // latest extension of that sweep; completed source candles
+    int raidTime = na
+    float raidExtreme = na
+    int structureId = 0    // confirmed opposite swing at the OB candle
+    float structurePx = na // intervening extreme from OB candle through the sweep
+    int breakerKnown = na  // later displacement close; NEVER the sweep candle
+export type PDBar
+    int t
+    float o
+    float h
+    float l
+    float c
+    float a
+    int b
+    int b0 = na     // first chart bar of the owner candle (HTF CISD anchors); b = processing bar
+export type PDStream
+    int src
+    string tag
+    array<PDArr> A
+    array<PDBar> bars
+    int seq = 0
+    int lastT = na
+    float ownerAtr = na
+    int nextId = 0
+    int impulse = 0
+    float lastHi = na
+    float prevHi = na
+    float lastLo = na
+    float prevLo = na
+    int hiSeq = na
+    int loSeq = na
+    float rangeHi = na
+    float rangeLo = na
+    int rangeN = 0
+    int rangeBreak = na
+    int rangeKnown = na
+    int cisDir = 0
+    float cisLevel = na
+    float cisGuard = na
+    int cisSeq = na
+    int cisBar = na
+    int cisFrom = na
+    int runDir = 0
+    float dnOpen = na
+    float upOpen = na
+    int dnFrom = na
+    int upFrom = na
+    float dnGuard = na
+    float upGuard = na
+    int dnEnd = na
+    int upEnd = na
+    bool dnArmed = false
+    bool upArmed = false
+    bool dnObUsed = false
+    bool upObUsed = false
+    PDBar dnBar
+    PDBar upBar
+    int cDir = 0
+    int cSeq = na
+    float cGuard = na
+    int holdB = na
+    int holdS = na
+    int failB = na
+    int failS = na
+    int holdBId = 0
+    int holdSId = 0
+    int failBId = 0
+    int failSId = 0
+    int flow = 0
+    int chainB = 0
+    int chainS = 0
+    int chainBAt = na
+    int chainSAt = na
+    int chainBOb = 0
+    int chainSOb = 0
+    int exhDir = 0
+    int exhState = 0
+    int exhAt = na
+    float exhHi = na
+    float exhLo = na
+    int exhPulse = 0
+    int holdPulse = 0
+    int failPulse = 0
+    int cont = 0
+    int contBar = na
+
+export type PDConfig
+    float tick
+    bool pdFallback
+    bool pdHasParent
+    array<PDStream> pdStreams
+    PDStream pdS0
+    array<HLvl> hls
+    array<PFvg> pfvgs
+    int i_atrLen
+    string i_entryAt
+    float i_fvgMin
+    string i_mtBasis
+    int i_pdAge
+    bool i_pdBb
+    bool i_pdBpr
+    float i_pdBuf
+    int i_pdCap
+    bool i_pdChain
+    string i_pdConfirm
+    bool i_pdEarlyExh
+    int i_pdExhLife
+    float i_pdExhStretch
+    int i_pdFlowAge
+    bool i_pdImplied
+    bool i_pdMb
+    bool i_pdOb
+    float i_pdObBody
+    bool i_pdRb
+    bool i_pdReclaim
+    int i_pdStale
+    bool i_pdVi
+    bool i_pdVoid
+    float i_pdWick
+    int i_pendMax
+    bool narrOb = false     // the indicator's narratives read OBs from the chart stream
+    bool narrBrk = false    // ... and show breakers from it
+
+export type CMapState
+    array<CMapCis> cMapCises
+    array<CMapArr> cMapArrs
+    int i_cisdSwingN
+    int i_cisdKeep
+
+//@function Shared Framework f_size implementation.
+export f_size(string s) =>
+    s == "Tiny" ? size.tiny : s == "Normal" ? size.normal : size.small
+
+//@function Shared Framework f_pos implementation.
+export f_pos(string s) =>
+    s == "Top Right" ? position.top_right : s == "Bottom Right" ? position.bottom_right : s == "Top Left" ? position.top_left : position.bottom_left
+
+//@function Shared Framework f_tfLbl implementation.
+export f_tfLbl(simple string tf) =>
+    int s = timeframe.in_seconds(tf)
+    s < 60 ? str.tostring(s) + "s" : s < 3600 ? str.tostring(math.round(s / 60.0)) + "m" : s < 86400 ? (s % 3600 == 0 ? str.tostring(math.round(s / 3600.0)) + "H" : str.tostring(math.round(s / 60.0)) + "m") : s < 604800 ? str.tostring(math.round(s / 86400.0)) + "D" : s < 2592000 ? str.tostring(math.round(s / 604800.0)) + "W" : str.tostring(math.round(s / 2628000.0)) + "M"
+
+//@function Shared Framework f_past implementation.
+export f_past(int x) => na(x) ? x : math.max(x, bar_index - 4990)
+
+//@function Shared Framework f_newLine implementation.
+export f_newLine(int x1, float y1, int x2, float y2, color ink, string style, int width, bool byTime) =>
+    line.new(x1, y1, x2, y2, xloc = byTime ? xloc.bar_time : xloc.bar_index, color = ink, style = style, width = width, force_overlay = true)
+
+//@function Shared Framework f_newLabel implementation.
+export f_newLabel(int x, float y, string caption, string style, color fill, color ink, string sz, string tip, bool mono) =>
+    label.new(x, y, caption, style = style, color = fill, textcolor = ink, size = sz, tooltip = tip, text_font_family = mono ? font.family_monospace : font.family_default, force_overlay = true)
+
+//@function Shared Framework f_newBox implementation.
+export f_newBox(int x1, float top, int x2, float bot, color border, color fill, string style, bool byTime, string caption, color ink, bool atTop, bool mono) =>
+    box.new(x1, top, x2, bot, xloc = byTime ? xloc.bar_time : xloc.bar_index, border_color = border, bgcolor = fill, border_width = 1, border_style = style, text = caption, text_size = size.tiny, text_color = ink, text_halign = text.align_left, text_valign = atTop ? text.align_top : text.align_center, text_font_family = mono ? font.family_monospace : font.family_default, force_overlay = true)
+
+//@function Shared Framework f_line implementation.
+export f_line(line id, int x1, float y1, int x2, float y2, color col, string sty, int w) =>
+    line out = id
+    if na(out)
+        out := f_newLine(x1, y1, x2, y2, col, sty, w, false)
+    else
+        line.set_xy1(out, x1, y1)
+        line.set_xy2(out, x2, y2)
+        line.set_color(out, col)
+        line.set_style(out, sty)
+        line.set_width(out, w)
+    out
+
+//@function Shared Framework f_label implementation.
+export f_label(label id, int x, float y, string txt, color col, string sty, string sz) =>
+    label out = id
+    if na(out)
+        out := f_newLabel(x, y, txt, sty, NOCOL, col, sz, "", true)
+    else
+        label.set_xy(out, x, y)
+        label.set_text(out, txt)
+        label.set_textcolor(out, col)
+        label.set_style(out, sty)
+        label.set_size(out, sz)
+    out
+
+//@function Shared Framework f_hideLine implementation.
+export f_hideLine(line id) =>
+    line out = na
+    if not na(id)
+        line.delete(id)
+    out
+
+//@function Shared Framework f_hideLabel implementation.
+export f_hideLabel(label id) =>
+    label out = na
+    if not na(id)
+        label.delete(id)
+    out
+
+//@function Shared Framework f_hideBox implementation.
+export f_hideBox(box id) =>
+    box out = na
+    if not na(id)
+        box.delete(id)
+    out
+
+//@function Shared Framework f_bodyDir implementation.
+export f_bodyDir(float o, float c) => c > o ? 1 : c < o ? -1 : 0
+
+//@function Shared Framework f_c2 implementation.
+export f_c2(int dir, float aH, float aL, float bH, float bL, float bC) =>
+    dir == 1 ? (bL < aL and bH <= aH and bC > aL and bC < aH) : (bH > aH and bL >= aL and bC < aH and bC > aL)
+
+//@function Shared Framework f_c3 implementation.
+export f_c3(int dir, float aH, float aL, float pO, float pH, float pL, float pC, float bH, float bL, float bC) =>
+    dir == 1 ? (pL < aL and pH <= aH and pC <= aL and bL > pL and bC > math.max(pO, pC) and bC > aL) : (pH > aH and pL >= aL and pC >= aH and bH < pH and bC < math.min(pO, pC) and bC < aH)
+
+//@function Shared Framework f_closure implementation.
+export f_closure(float aH, float aL, float bH, float bL, float bC) =>
+    string r = ""
+    if bL < aL and bC < aL
+        r := "CONT"
+    else if bH > aH and bC > aH
+        r := "CONT"
+    else if (bL < aL and bC > aL) or (bH > aH and bC < aH)
+        r := "REV"
+    r
+
+//@function Shared Framework f_newCMap implementation.
+export f_newCMap(int src, string tag, bool enabled) =>
+    CMapStrm.new(si = src, tag = tag, act = enabled, O = array.new_float(), H = array.new_float(), L = array.new_float(), C = array.new_float(), SB = array.new_int())
+
+//@function Shared Framework f_newPDStream implementation.
+export f_newPDStream(int src, string tag) =>
+    PDStream.new(src, tag, array.new<PDArr>(), array.new<PDBar>())
+
+//@function Shared Framework f_addHL implementation.
+export f_addHL(PDConfig cfg, float price, int dir, string name, int bornBar, int src) =>
+    if not na(price)
+        array.unshift(cfg.hls, HLvl.new(price, dir, name, bornBar, 0, src))
+        while array.size(cfg.hls) > 80
+            array.pop(cfg.hls)
+    true
+
+//@function Shared Framework f_swingHi implementation.
+export f_swingHi(float lH, float mH, float rH) => mH > lH and mH >= rH
+
+//@function Shared Framework f_swingLo implementation.
+export f_swingLo(float lL, float mL, float rL) => mL < lL and mL <= rL
+
+//@function Current polarity, without changing the original gap's direction or identity.
+export f_pfDir(PFvg z) => na(z.invertedAt) ? z.dir : -z.dir
+
+//@function Current key-area kind. An inverse is a separate phase of the same original bounds.
+export f_pfKind(PFvg z) => na(z.invertedAt) ? "FVG" : "iFVG"
+
+//@function Compact current-phase name shared by context, draw selection and key labels.
+export f_pfName(PFvg z) => z.tf + (f_pfDir(z) == 1 ? " +" : " -") + f_pfKind(z)
+
+//@function Stable identity within a gap phase; an original DRAW pin never follows an inversion.
+export f_pfKey(PFvg z) =>
+    str.tostring(z.src) + ":" + str.tostring(z.t0) + ":" + str.tostring(z.dir) + ":" + str.tostring(z.top, format.mintick) + ":" + str.tostring(z.bot, format.mintick) + (na(z.invertedAt) ? "" : ":iFVG")
+
+//@function Retain an exact formation once; keep at most 20 formations per owner source.
+export f_addPFvg(PDConfig cfg, float top, float bot, int dir, int t0, string tf, int conf, int src) =>
+    if top > bot and not na(t0)
+        bool exists = false
+        int count = 0
+        for z in cfg.pfvgs
+            if z.src == src
+                count += 1
+                // Less than half a tick preserves distinct neighbouring price levels.
+                if z.t0 == t0 and z.dir == dir and math.abs(z.top - top) < cfg.tick * 0.5 and math.abs(z.bot - bot) < cfg.tick * 0.5
+                    exists := true
+        if not exists
+            array.unshift(cfg.pfvgs, PFvg.new(top, bot, dir, t0, tf, 0, conf, src, bar_index))
+            count += 1
+        while count > 20
+            int oldest = -1
+            int invalid = -1
+            for i = 0 to array.size(cfg.pfvgs) - 1
+                PFvg z = array.get(cfg.pfvgs, i)
+                if z.src == src
+                    oldest := i
+                    if z.state >= 2
+                        invalid := i
+            array.remove(cfg.pfvgs, invalid >= 0 ? invalid : oldest)
+            count -= 1
+    true
+
+//@function The first completed owner close through the far edge creates an inverse; failure of that inverse retires it.
+export f_pfClose(array<PFvg> zones, int src, float closing) =>
+    for z in zones
+        if z.src == src and z.state < 2 and (f_pfDir(z) == 1 ? closing < z.bot : closing > z.top)
+            if na(z.invertedAt)
+                z.invertedAt := bar_index
+                z.state := 0
+            else
+                z.state := 2
+    true
+
+//@function Whether this display group contains the exact selected gap phase.
+export f_pfHas(PFGroup g, string key) =>
+    bool found = false
+    if not na(g) and key != ""
+        for z in g.members
+            if f_pfKey(z) == key
+                found := true
+                break
+    found
+
+//@function Build display groups without mutating registry order, member bounds or lifecycle.
+export f_pfGroups(array<PFvg> zones, bool keepTapped, array<string> pins) =>
+    array<PFvg> pending = array.new<PFvg>()
+    array<PFGroup> groups = array.new<PFGroup>()
+    for z in zones
+        if z.state < 2 and (z.state == 0 or keepTapped or array.includes(pins, f_pfKey(z)))
+            array.push(pending, z)
+    // Highest owner timeframe first; then freshness, newest confirmation, and stable ties.
+    // Local selection leaves the chronological registry untouched.
+    while array.size(pending) > 0
+        int best = 0
+        PFvg first = array.get(pending, 0)
+        if array.size(pending) > 1
+            for i = 1 to array.size(pending) - 1
+                PFvg z = array.get(pending, i)
+                int zAt = nz(z.invertedAt, z.conf)
+                int firstAt = nz(first.invertedAt, first.conf)
+                bool newer = zAt > firstAt or (zAt == firstAt and (z.t0 > first.t0 or (z.t0 == first.t0 and (z.top > first.top or (z.top == first.top and (z.bot > first.bot or (z.bot == first.bot and z.dir > first.dir)))))))
+                if z.src > first.src or (z.src == first.src and (z.state < first.state or (z.state == first.state and newer)))
+                    best := i
+                    first := z
+        PFvg next = array.remove(pending, best)
+        bool joined = false
+        for g in groups
+            float commonTop = math.min(g.overlapTop, next.top)
+            float commonBot = math.max(g.overlapBot, next.bot)
+            if f_pfDir(g.owner) == f_pfDir(next) and f_pfKind(g.owner) == f_pfKind(next) and commonTop > commonBot
+                array.push(g.members, next)
+                g.overlapTop := commonTop
+                g.overlapBot := commonBot
+                g.overlapFrom := math.max(g.overlapFrom, next.t0)
+                joined := true
+                break
+        if not joined
+            array<PFvg> members = array.new<PFvg>()
+            array.push(members, next)
+            array.push(groups, PFGroup.new(next, members, next.top, next.bot, next.t0))
+    groups
+
+//@function Shared Framework f_pdState implementation.
+export f_pdState(int st) =>
+    st == 0 ? "fresh" : st == 1 ? "testing" : st == 2 ? "reject?" : st == 3 ? "held" : st == 4 ? "failed" : "expired"
+
+//@function Shared Framework f_pdRecent implementation.
+export f_pdRecent(PDConfig cfg, PDStream s, int at) =>
+    not na(at) and s.seq - at <= cfg.i_pdFlowAge
+
+//@function Shared Framework f_pdById implementation.
+export f_pdById(PDStream s, int id) =>
+    PDArr found = na
+    if id != 0
+        for a in s.A
+            if a.id == id
+                found := a
+                break
+    found
+
+//@function Shared Framework f_pdEventAlive implementation.
+export f_pdEventAlive(PDConfig cfg, PDStream s, int id, bool held) =>
+    PDArr a = f_pdById(s, id)
+    not na(a) and a.eventContext == s.rangeN and (held ? a.state == 3 : a.state == 4) and f_pdRecent(cfg, s, a.eventSeq)
+
+//@function Shared Framework f_pdChain implementation.
+export f_pdChain(PDConfig cfg, PDStream s, PDArr a) =>
+    if cfg.i_pdChain
+        int d = a.kind == "OB" ? -a.dir : a.dir
+        int st = d == 1 ? s.chainB : s.chainS
+        int at = d == 1 ? s.chainBAt : s.chainSAt
+        int ob = d == 1 ? s.chainBOb : s.chainSOb
+        if a.kind == "OB" and st < 2
+            st := 1
+            at := s.seq
+            ob := a.id
+        else if a.kind == "BB" and st == 1 and a.parentId == ob and s.seq > at
+            st := 2
+            at := s.seq
+        else if a.kind == "BPR" and st == 2 and s.seq > at
+            st := 3
+            at := s.seq
+        else if a.kind == "FVG" and st == 3 and s.seq > at
+            st := 4
+            at := s.seq
+        if d == 1
+            s.chainB := st
+            s.chainBAt := at
+            s.chainBOb := ob
+        else
+            s.chainS := st
+            s.chainSAt := at
+            s.chainSOb := ob
+    true
+
+//@function Shared Framework f_pdAdd implementation.
+export f_pdAdd(PDConfig cfg, PDStream s, string kind, int d, float top, float bot, int origin, int impulse, int parentId, bool sib, float mt, int pairOrigin = na) =>
+    PDArr out = na
+    if not na(top) and not na(bot) and top >= bot
+        bool duplicate = false
+        for a in s.A
+            // BPR ownership is the exact gap pair, independent of which renderer found it.
+            // Return terminal matches unchanged; never revive an already-failed formation.
+            bool sameParents = kind == "BPR" ? (not na(pairOrigin) and a.pairOrigin == pairOrigin) : a.parentId == parentId
+            if a.kind == kind and a.dir == d and a.origin == origin and sameParents and math.abs(a.top - top) < cfg.tick * 0.5 and math.abs(a.bot - bot) < cfg.tick * 0.5
+                duplicate := true
+                out := a
+                break
+        if not duplicate
+            s.nextId += 1
+            out := PDArr.new(id = s.src * 100000000 + s.nextId, src = s.src, kind = kind, dir = d, top = top, bot = bot, origin = origin, known = bar_index, bornSeq = s.seq, impulse = impulse, parentId = parentId, sib = sib, mt = mt, pairOrigin = pairOrigin, firstKnown = bar_index)
+            // Context ownership is fixed when the child becomes knowable. Role-flip
+            // ancestry uses parentId separately; do not infer a parent retrospectively.
+            if s.src < 2 and cfg.pdHasParent
+                for ownerSrc = s.src + 1 to 2
+                    PDStream ownerStream = array.get(cfg.pdStreams, ownerSrc)
+                    float narrowest = na
+                    for parent in ownerStream.A
+                        if parent.state < 4 and parent.dir == d and top <= parent.top and bot >= parent.bot
+                            float span = parent.top - parent.bot
+                            if na(narrowest) or span < narrowest
+                                out.contextId := parent.id
+                                narrowest := span
+                    if out.contextId != 0
+                        break
+            array.push(s.A, out)
+            f_pdChain(cfg, s, out)
+    out
+
+//@function Shared Framework f_pdRecord implementation.
+export f_pdRecord(PDStream s, PDArr a, bool held) =>
+    a.eventSeq := s.seq
+    a.eventContext := s.rangeN
+    if held
+        s.holdPulse := a.dir
+        if a.dir == 1
+            s.holdB := s.seq
+            s.holdBId := a.id
+        else
+            s.holdS := s.seq
+            s.holdSId := a.id
+    else
+        s.failPulse := -a.dir
+        if a.dir == 1
+            s.failB := s.seq
+            s.failBId := a.id
+        else
+            s.failS := s.seq
+            s.failSId := a.id
+    true
+
+// A conservative operational breaker test; provenance does not gate the old engine.
+// The original OB sits after a confirmed pool and before its sweep. Lock the
+// intervening structure at the sweep; require a LATER displacement close through it.
+//@function Record causal sweep and structure evidence on an OB or its live flip.
+export f_pdBreakerEvidence(PDConfig cfg, PDStream s, PDArr a, PDBar b) =>
+    if (a.kind == "OB" or (a.kind == "BB" and not na(a.raidSeq))) and a.state < 4 and a.poolId != 0 and na(a.breakerKnown) and b.t > a.origin
+        int d = a.kind == "OB" ? -a.dir : a.dir
+        bool swept = d == 1 ? b.l < a.poolPx : b.h > a.poolPx
+        if na(a.raidSeq)
+            a.structurePx := d == 1 ? math.max(a.structurePx, b.h) : math.min(a.structurePx, b.l)
+            if swept
+                a.raidSeq := s.seq
+                a.raidTime := b.t
+                a.raidExtreme := d == 1 ? b.l : b.h
+        else if d == 1 ? b.l < a.raidExtreme : b.h > a.raidExtreme
+            // An extending sweep cannot also establish its own reversal ordering.
+            a.raidSeq := s.seq
+            a.raidTime := b.t
+            a.raidExtreme := d == 1 ? b.l : b.h
+            a.structurePx := d == 1 ? math.max(a.structurePx, b.h) : math.min(a.structurePx, b.l)
+        bool later = not na(a.raidSeq) and s.seq > a.raidSeq
+        bool displacement = d * (b.c - b.o) > 0 and math.abs(b.c - b.o) >= cfg.i_pdObBody * b.a
+        if later and displacement and d * (b.c - a.structurePx) > cfg.i_pdBuf * b.a
+            a.breakerKnown := bar_index
+    true
+
+//@function Seed the failed-OB provenance test using information known at qualification.
+export f_pdBreakerSeed(PDConfig cfg, PDStream s, PDArr a, PDBar ob, int obSeq, PDBar b) =>
+    PDArr pool = na
+    for p in s.A
+        bool kindOK = a.dir == 1 ? p.kind == "BSL" : p.kind == "SSL"
+        bool aliveAtBirth = (p.state < 4 or (p.state == 4 and p.eventSeq == s.seq)) and (p.touches == 0 or (p.touches == 1 and p.testedSeq == s.seq))
+        if kindOK and aliveAtBirth and p.origin < ob.t and p.bornSeq <= obSeq
+            if na(pool) or p.origin > pool.origin
+                pool := p
+    PDArr structure = na
+    if not na(pool)
+        for p in s.A
+            bool kindOK = a.dir == 1 ? p.kind == "SSL" : p.kind == "BSL"
+            if kindOK and p.origin > pool.origin and p.origin <= ob.t
+                bool moreExtreme = na(structure) or (a.dir == 1 ? p.bot < structure.bot : p.top > structure.top)
+                bool sameExtreme = not na(structure) and math.abs(p.top - structure.top) < cfg.tick * 0.5 and p.origin > structure.origin
+                if moreExtreme or sameExtreme
+                    structure := p
+    // The OB candle itself must be the confirmed intervening swing extreme.
+    // A minor candle below a prior peak (or above a prior trough) is insufficient.
+    if not na(pool) and not na(structure) and structure.origin == ob.t
+        a.poolId := pool.id
+        a.poolPx := pool.top
+        a.structureId := structure.id
+        a.structurePx := a.dir == 1 ? ob.l : ob.h
+        // Missing intervening candles must not be invented. Seed only while the
+        // complete interval from the OB to this qualification fits retained bars.
+        if s.seq - obSeq <= array.size(s.bars)
+            int n = array.size(s.bars)
+            if n > 0
+                for k = n - 1 to 0
+                    PDBar past = array.get(s.bars, k)
+                    if past.t > ob.t
+                        a.structurePx := a.dir == 1 ? math.min(a.structurePx, past.l) : math.max(a.structurePx, past.h)
+                        // A pool already swept between anchor and qualification is
+                        // stale for this conservative test; never backfill its time.
+                        if a.dir == 1 ? past.h > a.poolPx : past.l < a.poolPx
+                            a.poolId := 0
+            f_pdBreakerEvidence(cfg, s, a, b)
+        else
+            a.poolId := 0
+    true
+
+//@function Shared Framework f_pdResponse implementation.
+export f_pdResponse(PDConfig cfg, PDStream s, PDArr a, PDBar b, bool cisdNow) =>
+    if a.state < 4 and s.seq > a.bornSeq
+        f_pdBreakerEvidence(cfg, s, a, b)
+        float pad = cfg.i_pdBuf * b.a
+        bool failed = a.dir == 1 ? b.c < a.bot - pad : b.c > a.top + pad
+        bool touch = b.l <= a.top and b.h >= a.bot
+        if failed
+            a.state := 4
+            f_pdRecord(s, a, false)
+            // Children begin fresh NOW, never on the historical source candle; a role flip keeps the
+            // order-block candle as its chart anchor. The chart stream makes breakers whenever the
+            // narratives show them (the detector toggle only controls the expanded zones).
+            string ck = a.kind == "FVG" ? "iFVG" : a.kind == "OB" and (cfg.i_pdBb or (s.src == 0 and cfg.narrBrk)) ? "BB" : a.kind == "BB" and cfg.i_pdReclaim ? "ROB?" : ""
+            if ck != ""
+                PDArr child = f_pdAdd(cfg, s, ck, -a.dir, a.top, a.bot, a.origin, s.impulse, a.id, false, ck == "iFVG" ? float(na) : a.mt)
+                if not na(child)
+                    child.obBar := a.obBar
+                    child.firstKnown := a.firstKnown
+                    child.poolId := a.poolId
+                    child.poolPx := a.poolPx
+                    child.raidSeq := a.raidSeq
+                    child.raidTime := a.raidTime
+                    child.raidExtreme := a.raidExtreme
+                    child.structureId := a.structureId
+                    child.structurePx := a.structurePx
+                    child.breakerKnown := a.breakerKnown
+        else
+            if touch
+                if not a.inTest
+                    a.touches += 1
+                    if a.state != 2
+                        a.state := 1
+                        a.testedSeq := s.seq
+                float height = a.top - a.bot
+                float penetration = height > cfg.tick * 0.5 ? (a.dir == 1 ? (a.top - b.l) / height : (b.h - a.bot) / height) : 1.0
+                a.depth := math.max(a.depth, math.max(0.0, math.min(1.0, penetration)))
+            a.inTest := touch
+            bool confirming = a.state == 2 and s.seq > a.rejectSeq
+            bool follow = confirming and (a.dir == 1 ? b.c > a.rejectHi : b.c < a.rejectLo)
+            bool cis = confirming and cisdNow and s.cisDir == a.dir
+            bool hold = cfg.i_pdConfirm == "Follow-through" ? follow : cfg.i_pdConfirm == "CISD" ? cis : cfg.i_pdConfirm == "Either" ? follow or cis : false
+            if hold
+                a.state := 3
+                f_pdRecord(s, a, true)
+            else if (a.state == 1 or a.state == 2) and (a.dir == 1 ? b.c > a.top : b.c < a.bot)
+                // Do not move the original candidate extreme on every subsequent candle.
+                if a.state == 1
+                    a.state := 2
+                    a.rejectSeq := s.seq
+                    a.rejectHi := b.h
+                    a.rejectLo := b.l
+                if cfg.i_pdConfirm == "Close rejection"
+                    a.state := 3
+                    f_pdRecord(s, a, true)
+            if cfg.i_pdStale > 0 and (a.state == 1 or a.state == 2) and not na(a.testedSeq) and s.seq - a.testedSeq > cfg.i_pdStale
+                a.state := 5
+    true
+
+//@function Shared Framework f_pdResetContext implementation.
+export f_pdResetContext(PDStream s) =>
+    s.holdB := na
+    s.holdS := na
+    s.failB := na
+    s.failS := na
+    s.holdBId := 0
+    s.holdSId := 0
+    s.failBId := 0
+    s.failSId := 0
+    s.chainB := 0
+    s.chainS := 0
+    s.chainBOb := 0
+    s.chainSOb := 0
+    s.flow := 0
+    s.cont := 0
+    s.contBar := na
+    true
+
+//@function Shared Framework f_pdFlow implementation.
+export f_pdFlow(PDConfig cfg, PDStream s) =>
+    bool hb = f_pdEventAlive(cfg, s, s.holdBId, true)
+    bool hs = f_pdEventAlive(cfg, s, s.holdSId, true)
+    bool fb = f_pdEventAlive(cfg, s, s.failBId, false)
+    bool fs = f_pdEventAlive(cfg, s, s.failSId, false)
+    int upAt = math.max(hb ? s.holdB : -1, fs ? s.failS : -1)
+    int dnAt = math.max(hs ? s.holdS : -1, fb ? s.failB : -1)
+    bool bull = hb and fs and s.failS > s.holdB and s.failS > dnAt
+    bool bear = hs and fb and s.failB > s.holdS and s.failB > upAt
+    bool ranging = hb and hs and (not fb or s.failB < s.holdB) and (not fs or s.failS < s.holdS)
+    s.flow := ranging ? 2 : bull ? 1 : bear ? -1 : upAt >= 0 and dnAt >= 0 ? 3 : upAt >= 0 ? 1 : dnAt >= 0 ? -1 : 0
+    int was = s.cont
+    s.cont := bull ? 1 : bear ? -1 : 0
+    if s.cont != 0 and (was != s.cont or na(s.contBar))
+        s.contBar := bar_index
+    if s.cont == 0
+        s.contBar := na
+    if not na(s.chainBAt) and s.seq - s.chainBAt > cfg.i_pdFlowAge
+        s.chainB := 0
+        s.chainBOb := 0
+    if not na(s.chainSAt) and s.seq - s.chainSAt > cfg.i_pdFlowAge
+        s.chainS := 0
+        s.chainSOb := 0
+    true
+
+//@function Shared Framework f_pdGap implementation.
+export f_pdGap(PDConfig cfg, PDStream s, int d, float top, float bot, int origin, bool sib) =>
+    int priorN = array.size(s.A)
+    PDArr made = f_pdAdd(cfg, s, "FVG", d, top, bot, origin, s.impulse, 0, sib, na)
+    if cfg.i_pdBpr and not na(made) and priorN > 0
+        for i = priorN - 1 to 0
+            PDArr old = array.get(s.A, i)
+            if old.kind == "FVG" and old.dir == -d and old.state != 5 and s.seq - old.bornSeq <= cfg.i_pdFlowAge
+                float hi = math.min(top, old.top)
+                float lo = math.max(bot, old.bot)
+                if hi - lo >= cfg.tick
+                    f_pdAdd(cfg, s, "BPR", d, hi, lo, origin, s.impulse, old.id, false, na, old.origin)
+                    break
+    true
+
+//@function Shared Framework f_pdStep implementation.
+export f_pdStep(PDConfig cfg, PDStream s, PDBar b) =>
+    if not na(b.t) and (na(s.lastT) or b.t > s.lastT)
+        s.lastT := b.t
+        s.seq += 1
+        PDBar p = array.size(s.bars) > 0 ? array.get(s.bars, 0) : na
+        PDBar q = array.size(s.bars) > 1 ? array.get(s.bars, 1) : na
+        float tr = na(p) ? b.h - b.l : math.max(b.h - b.l, math.max(math.abs(b.h - p.c), math.abs(b.l - p.c)))
+        s.ownerAtr := na(s.ownerAtr) ? tr : (s.ownerAtr * (cfg.i_atrLen - 1) + tr) / cfg.i_atrLen
+        if na(b.a)
+            b.a := s.ownerAtr
+        int bodyDir = f_bodyDir(b.o, b.c)
+        // Only a completed owner candle can change structural CISD or array failure.
+        if s.cisDir != 0 and (s.cisDir == 1 ? b.c < s.cisGuard : b.c > s.cisGuard)
+            s.cisDir := 0
+            s.cisLevel := na
+            s.cisGuard := na
+            s.cisSeq := na
+            s.cisBar := na
+            s.cisFrom := na
+        bool cisB = s.dnArmed and s.seq - s.dnEnd <= cfg.i_pendMax and b.c > s.dnOpen
+        bool cisS = s.upArmed and s.seq - s.upEnd <= cfg.i_pendMax and b.c < s.upOpen
+        if cisB and cisS
+            cisB := bodyDir == 1
+            cisS := bodyDir == -1
+        bool cisNow = cisB or cisS
+        if cisNow
+            s.cisDir := cisB ? 1 : -1
+            s.cisLevel := cisB ? s.dnOpen : s.upOpen
+            s.cisSeq := s.seq
+            s.cisBar := bar_index
+            // The chart CISD keeps its existing anchor rule. Parent CISD protects the
+            // entire pending run and starts at the candle whose open supplied its level.
+            s.cisFrom := s.src == 0 ? (cisB ? s.dnBar.b : s.upBar.b) : (cisB ? s.dnFrom : s.upFrom)
+            s.cisGuard := s.src == 0 ? (cisB ? math.min(s.dnBar.l, b.l) : math.max(s.upBar.h, b.h)) : (cisB ? math.min(s.dnGuard, b.l) : math.max(s.upGuard, b.h))
+            s.impulse := s.seq
+            if cisB
+                s.dnArmed := false
+            else
+                s.upArmed := false
+        if not na(q)
+            if f_swingHi(q.h, p.h, b.h)
+                s.prevHi := s.lastHi
+                s.lastHi := p.h
+                s.hiSeq := s.seq
+                f_pdAdd(cfg, s, "BSL", -1, p.h, p.h, p.t, s.impulse, 0, false, na)
+                if cfg.pdFallback and s.src > 0
+                    f_addHL(cfg, p.h, 1, s.tag + " BSL", p.b, s.src)
+            if f_swingLo(q.l, p.l, b.l)
+                s.prevLo := s.lastLo
+                s.lastLo := p.l
+                s.loSeq := s.seq
+                f_pdAdd(cfg, s, "SSL", 1, p.l, p.l, p.t, s.impulse, 0, false, na)
+                if cfg.pdFallback and s.src > 0
+                    f_addHL(cfg, p.l, -1, s.tag + " SSL", p.b, s.src)
+        // Locked anchors: replace only after a close breaks the range and TWO new
+        // confirmed swing anchors become available. No pivot is used before confirmation.
+        bool haveAnchors = not na(s.lastHi) and not na(s.lastLo) and s.lastHi > s.lastLo
+        bool replaceRange = not na(s.rangeBreak) and s.hiSeq > s.rangeBreak and s.loSeq > s.rangeBreak
+        if haveAnchors and (na(s.rangeHi) or replaceRange)
+            s.rangeHi := s.lastHi
+            s.rangeLo := s.lastLo
+            s.rangeKnown := bar_index
+            s.rangeN += 1
+            s.rangeBreak := na
+            f_pdResetContext(s)
+        else if not na(s.rangeHi) and na(s.rangeBreak) and (b.c > s.rangeHi or b.c < s.rangeLo)
+            s.rangeBreak := s.seq
+        // A fresh sweep refreshes C2; C3 uses the canonical closure fallback.
+        if s.cDir != 0 and (s.cDir == 1 ? b.l < s.cGuard : b.h > s.cGuard)
+            s.cDir := 0
+        int cd = 0
+        PDBar c2bar = b
+        if not na(p)
+            bool c2b = f_c2(1, p.h, p.l, b.h, b.l, b.c)
+            bool c2s = f_c2(-1, p.h, p.l, b.h, b.l, b.c)
+            cd := c2b != c2s ? (c2b ? 1 : -1) : 0
+        if cd == 0 and not na(q)
+            bool c3b = f_c3(1, q.h, q.l, p.o, p.h, p.l, p.c, b.h, b.l, b.c)
+            bool c3s = f_c3(-1, q.h, q.l, p.o, p.h, p.l, p.c, b.h, b.l, b.c)
+            if c3b != c3s
+                cd := c3b ? 1 : -1
+                c2bar := p
+        if cd != 0
+            s.cDir := cd
+            s.cSeq := c2bar.t == b.t ? s.seq : s.seq - 1
+            s.cGuard := cd == 1 ? c2bar.l : c2bar.h
+        // Capture the loop bound before failures append fresh children.
+        int beforeN = array.size(s.A)
+        if beforeN > 0
+            for i = 0 to beforeN - 1
+                f_pdResponse(cfg, s, array.get(s.A, i), b, cisNow)
+        // OBs need an opposite candle, a close through its full range, and displacement.
+        bool displaced = math.abs(b.c - b.o) >= cfg.i_pdObBody * b.a
+        bool obB = not na(s.dnBar) and not s.dnObUsed and s.seq - s.dnEnd <= cfg.i_pendMax and b.c > s.dnBar.h and bodyDir == 1 and displaced
+        bool obS = not na(s.upBar) and not s.upObUsed and s.seq - s.upEnd <= cfg.i_pendMax and b.c < s.upBar.l and bodyDir == -1 and displaced
+        if obB or obS
+            int d = obB ? 1 : -1
+            PDBar ob = obB ? s.dnBar : s.upBar
+            // the narratives read their OB from the chart stream: it records OBs whenever they run
+            if cfg.i_pdOb or cfg.i_pdBb or cfg.i_pdReclaim or cfg.i_pdChain or (s.src == 0 and cfg.narrOb)
+                PDArr made = f_pdAdd(cfg, s, "OB", d, ob.h, ob.l, ob.t, s.impulse, 0, false, cfg.i_mtBasis == "Body" ? (ob.o + ob.c) / 2 : (ob.h + ob.l) / 2)
+                if not na(made)
+                    if s.src == 0
+                        made.obBar := ob.b
+                    // every stream records the swing / sweep / later-break evidence of its own OBs
+                    f_pdBreakerSeed(cfg, s, made, ob, d == 1 ? s.dnEnd : s.upEnd, b)
+            if obB
+                s.dnObUsed := true
+            else
+                s.upObUsed := true
+        if cfg.i_pdMb and cisNow
+            bool higherLow = cisB and not na(s.prevLo) and s.lastLo > s.prevLo and s.loSeq >= s.dnEnd and b.l >= s.lastLo
+            bool lowerHigh = cisS and not na(s.prevHi) and s.lastHi < s.prevHi and s.hiSeq >= s.upEnd and b.h <= s.lastHi
+            if higherLow or lowerHigh
+                PDBar mb = higherLow ? s.dnBar : s.upBar
+                f_pdAdd(cfg, s, "MB", higherLow ? 1 : -1, mb.h, mb.l, mb.t, s.impulse, 0, false, (mb.o + mb.c) / 2)
+        if cfg.i_pdRb and s.src > 0 and cd != 0 and c2bar.t == b.t
+            float wickTop = cd == 1 ? math.min(b.o, b.c) : b.h
+            float wickBot = cd == 1 ? b.l : math.max(b.o, b.c)
+            if wickTop - wickBot >= cfg.i_pdWick * (b.h - b.l) and wickTop > wickBot
+                f_pdAdd(cfg, s, "RB", cd, wickTop, wickBot, b.t, s.impulse, 0, false, (wickTop + wickBot) / 2)
+        if not na(q)
+            bool gu = b.l > q.h and b.l - q.h >= cfg.i_fvgMin * b.a
+            bool gd = b.h < q.l and q.l - b.h >= cfg.i_fvgMin * b.a
+            if gu or gd
+                int d = gu ? 1 : -1
+                float top = gu ? b.l : q.l
+                float bot = gu ? q.h : b.h
+                bool sib = f_bodyDir(q.o, q.c) == d and f_bodyDir(p.o, p.c) == d and bodyDir == d
+                f_pdGap(cfg, s, d, top, bot, p.t, sib)
+                if cfg.pdFallback and s.src > 0
+                    f_addPFvg(cfg, top, bot, d, q.t, s.tag, bar_index, s.src)
+            if cfg.i_pdImplied and not gu and not gd
+                float upLo = (q.h + math.max(q.o, q.c)) / 2
+                float upHi = (b.l + math.min(b.o, b.c)) / 2
+                float dnHi = (q.l + math.min(q.o, q.c)) / 2
+                float dnLo = (b.h + math.max(b.o, b.c)) / 2
+                bool midDisp = math.abs(p.c - p.o) >= cfg.i_pdObBody * p.a
+                if midDisp and p.c > p.o and upHi > upLo and b.c > q.c
+                    f_pdAdd(cfg, s, "IFG?", 1, upHi, upLo, p.t, s.impulse, 0, false, na)
+                if midDisp and p.c < p.o and dnHi > dnLo and b.c < q.c
+                    f_pdAdd(cfg, s, "IFG?", -1, dnHi, dnLo, p.t, s.impulse, 0, false, na)
+        if not na(p)
+            float bh = math.max(b.o, b.c)
+            float bl = math.min(b.o, b.c)
+            float ph = math.max(p.o, p.c)
+            float pl = math.min(p.o, p.c)
+            bool wickOverlap = b.l <= p.h and b.h >= p.l
+            if cfg.i_pdVi and wickOverlap
+                if bl > ph
+                    f_pdAdd(cfg, s, "VI", 1, bl, ph, p.t, s.impulse, 0, false, na)
+                if bh < pl
+                    f_pdAdd(cfg, s, "VI", -1, pl, bh, p.t, s.impulse, 0, false, na)
+            float overlap = math.max(0.0, math.min(bh, ph) - math.max(bl, pl))
+            float minBody = math.min(bh - bl, ph - pl)
+            if cfg.i_pdVoid and bodyDir != 0 and f_bodyDir(p.o, p.c) == bodyDir and bh - bl >= 0.7 * b.a and ph - pl >= 0.7 * p.a and overlap <= 0.25 * minBody
+                f_pdAdd(cfg, s, "VOID?", bodyDir, math.max(b.c, p.o), math.min(b.c, p.o), p.t, s.impulse, 0, false, na)
+        // Pending anchors update AFTER confirmation tests; a bar cannot confirm its own run.
+        if bodyDir == -1
+            if s.runDir != -1
+                s.dnOpen := b.o
+                s.dnFrom := nz(b.b0, b.b)
+                s.dnGuard := b.l
+                s.dnArmed := true
+                s.dnObUsed := false
+            s.dnBar := b
+            s.dnEnd := s.seq
+        else if bodyDir == 1
+            if s.runDir != 1
+                s.upOpen := b.o
+                s.upFrom := nz(b.b0, b.b)
+                s.upGuard := b.h
+                s.upArmed := true
+                s.upObUsed := false
+            s.upBar := b
+            s.upEnd := s.seq
+        if bodyDir != 0
+            s.runDir := bodyDir
+        // Intervening candles, including dojis, can extend a pending protected extreme.
+        if s.dnArmed
+            s.dnGuard := math.min(s.dnGuard, b.l)
+        if s.upArmed
+            s.upGuard := math.max(s.upGuard, b.h)
+        if cfg.pdFallback and s.src > 0
+            f_pfClose(cfg.pfvgs, s.src, b.c)
+        // Early exhaustion is prospective; it never reads the narrative outcome ledger.
+        if cfg.i_pdEarlyExh
+            if s.exhState == 1 and s.seq > s.exhAt
+                bool extension = s.exhDir == 1 ? b.h > s.exhHi : b.l < s.exhLo
+                bool response = s.exhDir == 1 ? b.c < s.exhLo : b.c > s.exhHi
+                if extension
+                    s.exhState := 3
+                else if response
+                    s.exhState := 2
+                    s.exhPulse := -s.exhDir * 2
+                else if s.seq - s.exhAt > cfg.i_pdExhLife
+                    s.exhState := 4
+            int xd = s.cisDir
+            float anchor = xd == 1 ? s.lastLo : s.lastHi
+            float wick = xd == 1 ? b.h - math.max(b.o, b.c) : math.min(b.o, b.c) - b.l
+            bool stretched = xd != 0 and not na(anchor) and xd * (b.c - anchor) >= cfg.i_pdExhStretch * b.a
+            if s.exhState != 1 and (na(s.exhAt) or s.seq > s.exhAt + cfg.i_pdExhLife) and stretched and b.h > b.l and wick / (b.h - b.l) >= 0.4
+                s.exhState := 1
+                s.exhDir := xd
+                s.exhAt := s.seq
+                s.exhHi := b.h
+                s.exhLo := b.l
+                s.exhPulse := -xd
+        array.unshift(s.bars, b)
+        if array.size(s.bars) > 4
+            array.pop(s.bars)
+        int count = array.size(s.A)
+        if count > 0
+            for i = count - 1 to 0
+                PDArr a = array.get(s.A, i)
+                if s.seq - a.bornSeq > cfg.i_pdAge
+                    array.remove(s.A, i)
+        while array.size(s.A) > cfg.i_pdCap
+            array.shift(s.A)
+        f_pdFlow(cfg, s)
+    true
+
+//@function Shared Framework f_pdNear implementation.
+export f_pdNear(PDConfig cfg, int d, float refPx, bool opposite, int onlySrc) =>
+    PDArr found = na
+    float best = na
+    for s in cfg.pdStreams
+        if (s.src == 0 or cfg.pdHasParent) and (onlySrc < 0 or s.src == onlySrc)
+            for a in s.A
+                int want = opposite ? -d : d
+                float edge = opposite ? (d == 1 ? a.bot : a.top) : (d == 1 ? a.top : a.bot)
+                bool side = opposite ? (d == 1 ? a.top >= refPx : a.bot <= refPx) : (d == 1 ? a.bot <= refPx : a.top >= refPx)
+                if a.state < 4 and a.dir == want and side
+                    float dist = opposite ? math.max(0.0, d * (edge - refPx)) : math.max(0.0, d * (refPx - edge))
+                    if na(best) or dist < best or (dist == best and not na(found) and a.src > found.src)
+                        found := a
+                        best := dist
+    found
+
+//@function Shared Framework f_pdEntry implementation.
+export f_pdEntry(PDConfig cfg, int d, int afterBar, bool onlyFvg) =>
+    PDArr found = na
+    float distance = na
+    for a in cfg.pdS0.A
+        bool kindOK = onlyFvg ? (a.kind == "FVG" or a.kind == "iFVG") : (a.kind == "FVG" or a.kind == "iFVG" or a.kind == "OB" or a.kind == "BB" or a.kind == "BPR" or a.kind == "MB")
+        float px = cfg.i_entryAt == "Proximal" ? (d == 1 ? a.top : a.bot) : na(a.mt) ? (a.top + a.bot) / 2 : a.mt
+        float dd = d * (close - px)
+        if a.state < 4 and a.dir == d and kindOK and a.known >= afterBar and dd > cfg.tick
+            if na(distance) or dd < distance
+                found := a
+                distance := dd
+    found
+
+//@function Shared Framework f_pdName implementation.
+export f_pdName(PDConfig cfg, PDArr a) =>
+    na(a) ? "—" : array.get(cfg.pdStreams, a.src).tag + " " + (a.dir == 1 ? "+" : "-") + (a.kind == "BB" and na(a.breakerKnown) ? "OB flip" : a.kind)
+
+//@function Shared Framework f_pdRangeLoc implementation.
+export f_pdRangeLoc(PDStream s, float top, float bot) =>
+    float eq = (s.rangeHi + s.rangeLo) / 2
+    na(eq) ? "range pending" : bot > s.rangeHi ? "above range" : top < s.rangeLo ? "below range" : bot < eq and top > eq ? "straddles EQ" : top < eq ? "discount" : bot > eq ? "premium" : "at EQ"
+
+//@function Shared Framework f_pdCounts implementation.
+export f_pdCounts(PDConfig cfg, int d) =>
+    int raw = 0
+    array<int> keys = array.new_int()
+    for s in cfg.pdStreams
+        if s.src == 0 or cfg.pdHasParent
+            for a in s.A
+                if a.dir == d and a.state < 4 and s.seq - a.bornSeq <= cfg.i_pdFlowAge
+                    // Raw view explicitly counts FVG, its same-colour classification and CE.
+                    raw += a.kind == "FVG" ? (a.sib ? 3 : 2) : 1
+                    int key = s.src * 100000000 + a.impulse
+                    if not array.includes(keys, key)
+                        array.push(keys, key)
+    [raw, array.size(keys)]
+
+//@function Shared Framework f_cmX implementation.
+export f_cmX(CMapStrm s, int q) => array.size(s.O) - 1 - (s.seq - q)
+
+//@function Shared Framework f_cmOld implementation.
+export f_cmOld(CMapStrm s) => s.seq - array.size(s.O) + 1
+
+//@function Shared Framework f_cmO implementation.
+export f_cmO(CMapStrm s, int q) => array.get(s.O, f_cmX(s, q))
+
+//@function Shared Framework f_cmH implementation.
+export f_cmH(CMapStrm s, int q) => array.get(s.H, f_cmX(s, q))
+
+//@function Shared Framework f_cmL implementation.
+export f_cmL(CMapStrm s, int q) => array.get(s.L, f_cmX(s, q))
+
+//@function Shared Framework f_cmC implementation.
+export f_cmC(CMapStrm s, int q) => array.get(s.C, f_cmX(s, q))
+
+//@function Shared Framework f_cmB implementation.
+export f_cmB(CMapStrm s, int q) => array.get(s.SB, f_cmX(s, q))
+
+//@function Shared Framework f_cmFlags implementation.
+export f_cmFlags(CMapState reg, int cid) =>
+    bool hO = false
+    bool hF = false
+    bool hI = false
+    bool hB = false
+    for a in reg.cMapArrs
+        if a.cid == cid
+            if a.kind == 1
+                hO := true
+            else if a.kind == 2
+                hF := true
+            else if a.kind == 3
+                hI := true
+            else
+                hB := true
+    [hO, hF, hI, hB]
+
+//@function Shared Framework f_cmTagTxt implementation.
+export f_cmTagTxt(bool hO, bool hF, bool hI, bool hB) =>
+    string t = hI ? "IFVG" : ""
+    if hF
+        t += (t == "" ? "" : "·") + "FVG"
+    if hB
+        t += (t == "" ? "" : "·") + "BPR"
+    if t == "" and hO
+        t := "OB"
+    t
+
+//@function Shared Framework f_cmAlive implementation.
+export f_cmAlive(CMapState reg, int cid) =>
+    bool ok = false
+    for c in reg.cMapCises
+        if c.id == cid
+            ok := true
+    ok
+
+//@function Shared Framework f_cmDrop implementation.
+export f_cmDrop(CMapState reg, int ix) =>
+    CMapCis c = array.get(reg.cMapCises, ix)
+    int n = array.size(reg.cMapArrs)
+    if n > 0
+        for i = n - 1 to 0
+            CMapArr a = array.get(reg.cMapArrs, i)
+            if a.cid == c.id
+                array.remove(reg.cMapArrs, i)
+    array.remove(reg.cMapCises, ix)
+    0
+
+//@function Shared Framework f_cmAddArr implementation.
+export f_cmAddArr(CMapState reg, int cid, CMapStrm s, int d, int kd, float top, float bot) =>
+    if top > bot
+        array.push(reg.cMapArrs, CMapArr.new(cid, d, kd, s.si, top, bot))
+    0
+
+//@function Shared Framework f_cmLeg implementation.
+export f_cmLeg(CMapState reg, CMapStrm s, int d, int K, int e, int i0, int cid) =>
+    int old = f_cmOld(s)
+    int jLo = math.max(e, old + 1)
+    float fTop = na
+    float fBot = na
+    if K >= jLo
+        for j = K to jLo
+            float gBot = d == 1 ? f_cmH(s, j - 1) : f_cmH(s, j + 1)
+            float gTop = d == 1 ? f_cmL(s, j + 1) : f_cmL(s, j - 1)
+            if gTop > gBot
+                fTop := gTop
+                fBot := gBot
+                break
+    if not na(fTop)
+        f_cmAddArr(reg, cid, s, d, 2, fTop, fBot)
+        float pLo = na
+        float pHi = na
+        int kLo = math.max(i0, old + 1)
+        int kHi = math.min(e, K - 1)
+        if kHi >= kLo
+            for j = kLo to kHi
+                float oBot = d == 1 ? f_cmH(s, j + 1) : f_cmH(s, j - 1)
+                float oTop = d == 1 ? f_cmL(s, j - 1) : f_cmL(s, j + 1)
+                if oTop > oBot
+                    float lo = math.max(fBot, oBot)
+                    float hi = math.min(fTop, oTop)
+                    if hi > lo and (na(pLo) or hi - lo > pHi - pLo)
+                        pLo := lo
+                        pHi := hi
+        if not na(pLo)
+            f_cmAddArr(reg, cid, s, d, 4, pHi, pLo)
+    0
+
+//@function Shared Framework f_cmCisd implementation.
+export f_cmCisd(CMapState reg, CMapStrm s, int d) =>
+    int k = s.seq
+    int i0 = d == 1 ? s.dnSeq : s.upSeq
+    int old = f_cmOld(s)
+    if not na(i0) and i0 >= old and k > i0
+        int e = i0
+        float ex = d == 1 ? f_cmL(s, i0) : f_cmH(s, i0)
+        for q = i0 + 1 to k
+            float v = d == 1 ? f_cmL(s, q) : f_cmH(s, q)
+            if d == 1 ? v < ex : v > ex
+                ex := v
+                e := q
+        bool swing = true
+        if reg.i_cisdSwingN > 0
+            if e - reg.i_cisdSwingN < old
+                swing := false
+            else
+                for q = e - reg.i_cisdSwingN to e - 1
+                    float v = d == 1 ? f_cmL(s, q) : f_cmH(s, q)
+                    if d == 1 ? v <= ex : v >= ex
+                        swing := false
+                        break
+        if swing
+            int cid = bar_index * 6 + s.si * 2 + (d == 1 ? 0 : 1)
+            array.push(reg.cMapCises, CMapCis.new(cid, s.si, d, f_cmO(s, i0), f_cmB(s, i0), bar_index, ex))
+            int cnt = 0
+            for c in reg.cMapCises
+                if c.si == s.si
+                    cnt += 1
+            if cnt > reg.i_cisdKeep
+                int nCs = array.size(reg.cMapCises)
+                int dropIx = -1
+                for i = 0 to nCs - 1
+                    CMapCis c = array.get(reg.cMapCises, i)
+                    if c.si == s.si and c.tested and dropIx < 0
+                        dropIx := i
+                if dropIx < 0
+                    for i = 0 to nCs - 1
+                        CMapCis c = array.get(reg.cMapCises, i)
+                        if c.si == s.si and dropIx < 0
+                            dropIx := i
+                if dropIx >= 0
+                    f_cmDrop(reg, dropIx)
+            // OB = the opposite-colour run itself
+            int i1 = math.min(d == 1 ? s.dnEnd : s.upEnd, k - 1)
+            if i1 >= i0
+                float lvl = f_cmO(s, i0)
+                float ext = lvl
+                for q = i0 to i1
+                    ext := d == 1 ? math.min(ext, f_cmL(s, q)) : math.max(ext, f_cmH(s, q))
+                f_cmAddArr(reg, cid, s, d, 1, d == 1 ? lvl : ext, d == 1 ? ext : lvl)
+            // IFVG = newest opposite gap in the run that the CISD leg closed through
+            float legX = f_cmC(s, e)
+            for q = e to k
+                legX := d == 1 ? math.max(legX, f_cmC(s, q)) : math.min(legX, f_cmC(s, q))
+            int jHi = math.min(e, k - 1)
+            int jLo = math.max(i0, old + 1)
+            if jHi >= jLo
+                for j = jHi to jLo
+                    float oBot = d == 1 ? f_cmH(s, j + 1) : f_cmH(s, j - 1)
+                    float oTop = d == 1 ? f_cmL(s, j - 1) : f_cmL(s, j + 1)
+                    if oTop > oBot and (d == 1 ? legX > oTop : legX < oBot)
+                        f_cmAddArr(reg, cid, s, d, 3, oTop, oBot)
+                        break
+            if d == 1
+                s.pBK := k
+                s.pBE := e
+                s.pB0 := i0
+                s.pBC := cid
+            else
+                s.pSK := k
+                s.pSE := e
+                s.pS0 := i0
+                s.pSC := cid
+    0
+
+//@function Shared Framework f_cmClose implementation.
+export f_cmClose(CMapState reg, CMapStrm s) =>
+    s.live := false
+    s.seq += 1
+    array.push(s.O, s.fo)
+    array.push(s.H, s.fh)
+    array.push(s.L, s.fl)
+    array.push(s.C, s.fc)
+    array.push(s.SB, s.fB)
+    if array.size(s.O) > 120
+        array.shift(s.O)
+        array.shift(s.H)
+        array.shift(s.L)
+        array.shift(s.C)
+        array.shift(s.SB)
+    float o = s.fo
+    float c = s.fc
+    // xC2 lifecycle: a close of its own timeframe back through the level marks the CISD tested;
+    // the protected extreme trading again (checked per chart bar below) releases it.
+    int nc = array.size(reg.cMapCises)
+    if nc > 0
+        for i = nc - 1 to 0
+            CMapCis x = array.get(reg.cMapCises, i)
+            if x.si == s.si and (x.dir == 1 ? c < x.lvl : c > x.lvl)
+                x.tested := true
+    int nax = array.size(reg.cMapArrs)
+    if nax > 0
+        for i = nax - 1 to 0
+            CMapArr a = array.get(reg.cMapArrs, i)
+            if a.si == s.si and (a.dir == 1 ? c < a.bot : c > a.top)
+                array.remove(reg.cMapArrs, i)
+    for side = 0 to 1
+        int d = side == 0 ? 1 : -1
+        int pK = d == 1 ? s.pBK : s.pSK
+        if not na(pK)
+            int pC = d == 1 ? s.pBC : s.pSC
+            if s.seq == pK + 1 and f_cmAlive(reg, pC)
+                f_cmLeg(reg, s, d, pK, d == 1 ? s.pBE : s.pSE, d == 1 ? s.pB0 : s.pS0, pC)
+            if d == 1
+                s.pBK := na
+            else
+                s.pSK := na
+    int bodySign = c > o ? 1 : c < o ? -1 : 0
+    int rb = bodySign == 0 ? s.prevBody : bodySign
+    if rb == -1
+        if s.prevBody != -1
+            s.dnOpen := o
+            s.dnSeq := s.seq
+            s.dnArm := true
+        s.dnEnd := s.seq
+    if rb == 1
+        if s.prevBody != 1
+            s.upOpen := o
+            s.upSeq := s.seq
+            s.upArm := true
+        s.upEnd := s.seq
+    s.prevBody := rb
+    for side = 0 to 1
+        int d = side == 0 ? 1 : -1
+        if d == 1 ? s.dnArm and c > s.dnOpen : s.upArm and c < s.upOpen
+            if d == 1
+                s.dnArm := false
+            else
+                s.upArm := false
+            f_cmCisd(reg, s, d)
+    0
+
+//@function Shared Framework f_cmBar implementation.
+export f_cmBar(CMapState reg, CMapStrm s, bool isNew, bool isEnd) =>
+    for pass = 0 to 1
+        if pass == 0 ? isNew and s.live : isEnd
+            f_cmClose(reg, s)
+        if pass == 0
+            if isNew or not s.live
+                s.fo := open
+                s.fh := high
+                s.fl := low
+                s.fB := bar_index
+                s.live := true
+            else
+                s.fh := math.max(s.fh, high)
+                s.fl := math.min(s.fl, low)
+            s.fc := close
+    0
+
+//@function Shared Framework f_cisdPicks implementation.
+export f_cisdPicks(array<CisdK> ks, float tol, float refPx, int perSide) =>
+    array<int> owners = array.new_int()
+    array<int> picks = array.new_int()
+    int n = array.size(ks)
+    if n > 0
+        for rep = 0 to n - 1
+            int top = -1
+            for i = 0 to n - 1
+                CisdK k = array.get(ks, i)
+                if k.cl < 0 and k.pri >= 10
+                    if top < 0
+                        top := i
+                    else
+                        CisdK t = array.get(ks, top)
+                        bool better = k.pri > t.pri or (k.pri == t.pri and k.rec > t.rec)
+                        bool nearerTie = k.pri == t.pri and k.rec == t.rec and math.abs(refPx - k.lvl) < math.abs(refPx - t.lvl)
+                        if better or nearerTie
+                            top := i
+            if top < 0
+                break
+            CisdK owner = array.get(ks, top)
+            int cl = array.size(owners)
+            for k in ks
+                if k.cl < 0 and math.abs(k.lvl - owner.lvl) <= tol
+                    k.cl := cl
+            array.push(owners, top)
+    int ownerN = array.size(owners)
+    int slotsBull = 0
+    int slotsBear = 0
+    if ownerN > 0
+        for rep = 0 to ownerN - 1
+            int bestPos = -1
+            float bestDist = na
+            int remaining = array.size(owners)
+            if remaining > 0
+                for i = 0 to remaining - 1
+                    CisdK k = array.get(ks, array.get(owners, i))
+                    bool slotFree = k.pri >= 20 or (k.dir == 1 ? slotsBull : slotsBear) < perSide
+                    float dd = k.pri >= 20 ? -1.0 : math.abs(refPx - k.lvl)
+                    if slotFree and (bestPos < 0 or dd < bestDist)
+                        bestPos := i
+                        bestDist := dd
+            if bestPos < 0
+                break
+            int top = array.remove(owners, bestPos)
+            CisdK owner = array.get(ks, top)
+            array.push(picks, top)
+            if owner.pri < 20
+                if owner.dir == 1
+                    slotsBull += 1
+                else
+                    slotsBear += 1
+    picks
+
+//@function Shared Framework f_cisdHiddenNarratives implementation.
+export f_cisdHiddenNarratives(array<CisdK> ks, array<int> picks, float tol) =>
+    array<int> hidden = array.new_int()
+    for k in ks
+        if k.seqId > 0
+            for top in picks
+                CisdK owner = array.get(ks, top)
+                if math.abs(k.lvl - owner.lvl) <= tol
+                    array.push(hidden, k.seqId)
+                    break
+    for k in ks
+        if k.seqId > 0 and not array.includes(hidden, k.seqId)
+            for other in ks
+                bool newer = other.rec > k.rec or (other.rec == k.rec and other.seqId > k.seqId)
+                if other.seqId > 0 and not array.includes(hidden, other.seqId) and newer and math.abs(other.lvl - k.lvl) <= tol
+                    array.push(hidden, k.seqId)
+                    break
+    hidden
+
+// =============================================================================
+// Display and selection helpers (moved from the indicator in v1.0.7)
+// =============================================================================
+//@function Line style from a "Solid" / "Dotted" / "Dashed" display setting.
+export f_sty(string s) => s == "Dotted" ? line.style_dotted : s == "Dashed" ? line.style_dashed : line.style_solid
+
+//@function HUD text cell.
+export f_cell(table t, int c, int r, string tx, color tc) =>
+    table.cell(t, c, r, tx, text_color = tc, text_size = size.tiny, text_halign = c == 0 ? text.align_left : text.align_center, text_font_family = font.family_monospace)
+    true
+
+//@function HUD text cell with a tooltip.
+export f_tipCell(table t, int col, int row, string txt, string tip, color colorText) =>
+    table.cell(t, col, row, txt, tooltip = tip, text_color = colorText, text_size = size.tiny, text_halign = col == 0 ? text.align_left : text.align_center, text_font_family = font.family_monospace)
+    true
+
+//@function Legend row: colour swatch and caption.
+export f_swatch(table t, int r, color c, string tx) =>
+    table.cell(t, 0, r, "    ", bgcolor = color.new(c, math.min(color.t(c), 25.0)), text_size = size.tiny)
+    table.cell(t, 1, r, tx, text_color = #D1D4DC, text_size = size.tiny, text_halign = text.align_left)
+    true
+
+//@function MMXM side of the curve: three points bowing into the empty corner beside a leg between its far end E (xE, yE) and the grab G (xG, yG). first = the manipulation leg (E before G).
+export f_curvePts(int xE, float yE, int xG, float yG, bool first) =>
+    int   w  = math.abs(xG - xE)
+    float hg = yE - yG
+    int   xs = first ? xE + math.round(0.08 * w) : xG + math.max(1, math.round(0.22 * w))
+    int   xm = first ? xE + math.round(0.30 * w) : xE - math.round(0.30 * w)
+    int   xt = first ? xG - math.max(1, math.round(0.22 * w)) : xE - math.round(0.08 * w)
+    float ys = first ? yE - 0.18 * hg : yG + 0.05 * hg
+    float yt = first ? yG + 0.05 * hg : yE - 0.18 * hg
+    array.from(chart.point.from_index(f_past(xs), ys), chart.point.from_index(f_past(xm), yG + 0.30 * hg), chart.point.from_index(f_past(xt), yt))
+
+//@function Time-anchored zone line ending at endT: created once, then moved and restyled.
+export f_timeLine(line id, int fromT, int endT, float price, color col, string style, int w) =>
+    line out = id
+    if na(out)
+        out := f_newLine(fromT, price, endT, price, col, style, w, true)
+    else
+        line.set_xy1(out, fromT, price)
+        line.set_xy2(out, endT, price)
+        line.set_color(out, col)
+        line.set_style(out, style)
+    out
+
+//@function PD array tooltip: identity, bounds, lifecycle and breaker evidence. tz = display timezone.
+export f_pdTip(PDConfig cfg, PDArr a, string tz) =>
+    string tip = ""
+    if not na(a)
+        PDStream own = array.get(cfg.pdStreams, a.src)
+        tip := f_pdName(cfg, a) + " · " + f_pdState(a.state) + "\nBounds " + str.tostring(a.bot, format.mintick) + "–" + str.tostring(a.top, format.mintick) + "\nOriginal candle " + str.format_time(a.origin, "yyyy-MM-dd HH:mm", tz) + "\nOriginal qualification bar " + str.tostring(a.firstKnown) + " / current role active from " + str.tostring(a.known) + "\nTouches " + str.tostring(a.touches) + " / deepest test " + str.tostring(math.round(a.depth * 100)) + "% / test age " + (na(a.testedSeq) ? "—" : str.tostring(own.seq - a.testedSeq)) + " source bars\nAncestor " + str.tostring(a.parentId) + " / HTF context at activation " + str.tostring(a.contextId)
+        if a.kind == "BB"
+            tip += na(a.breakerKnown) ? "\nOB flip: swing / sweep / later structure break not fully established." : "\nBreaker evidence: pool " + str.tostring(a.poolId) + " @ " + str.tostring(a.poolPx, format.mintick) + "; swing " + str.tostring(a.structureId) + "; sweep " + str.format_time(a.raidTime, "yyyy-MM-dd HH:mm", tz) + "; structure " + str.tostring(a.structurePx, format.mintick) + "; later displacement close known at bar " + str.tostring(a.breakerKnown)
+    tip
+
+//@function Structure checklist percentage for one side. NOT a probability. atr = chart ATR.
+export f_pdScore(PDConfig cfg, int d, PDStream context, float atr) =>
+    bool flow = context.flow == d
+    bool cis = cfg.pdS0.cisDir == d and f_pdRecent(cfg, cfg.pdS0, cfg.pdS0.cisSeq)
+    bool cseq = context.cDir == d and not na(context.cSeq) and context.seq - context.cSeq <= 2
+    float eq = (context.rangeHi + context.rangeLo) / 2
+    bool loc = not na(eq) and (d == 1 ? close <= eq : close >= eq)
+    bool held = f_pdEventAlive(cfg, context, d == 1 ? context.holdBId : context.holdSId, true)
+    PDArr obstacle = f_pdNear(cfg, d, close, true, -1)
+    float room = na(obstacle) ? na : d * ((d == 1 ? obstacle.bot : obstacle.top) - close)
+    int score = (flow ? 25 : 0) + (cis ? 20 : 0) + (cseq ? 15 : 0) + (loc ? 15 : 0) + (held ? 15 : 0) + (not na(room) and room >= atr ? 10 : 0)
+    score
+
+//@function Nearest live HTF1 swing on the correct side of refPx; avoidPx keeps a second slot out of the first cluster. HTF2 swings are never seeds: they only join a seed's name.
+export f_hlBest(PDConfig cfg, int dir, float avoidPx, float tol, float refPx) =>
+    int best = -1
+    float bestD = na
+    int n = array.size(cfg.hls)
+    if n > 0
+        for i = 0 to n - 1
+            HLvl l = array.get(cfg.hls, i)
+            bool side = dir == 1 ? l.price > refPx : l.price < refPx
+            bool away = na(avoidPx) or math.abs(l.price - avoidPx) > tol
+            if l.state == 0 and l.src == 1 and l.dir == dir and side and away
+                float d = math.abs(l.price - refPx)
+                if na(bestD) or d < bestD
+                    best := i
+                    bestD := d
+    best
+
+//@function Swing slots for one side: an exact live swing draw first (it keeps its target even after age pruning retired it from new grabs); any second slot stays outside its cluster. HTF2 never seeds a line.
+export f_hlPicks(PDConfig cfg, int dir, float drawPx, float tol, float refPx, int perSide) =>
+    int drawIdx = -1
+    int n = array.size(cfg.hls)
+    if not na(drawPx) and n > 0
+        for i = 0 to n - 1
+            HLvl l = array.get(cfg.hls, i)
+            if l.src == 1 and l.dir == dir and math.abs(l.price - drawPx) < cfg.tick * 0.5
+                drawIdx := i
+                break
+    int first = drawIdx >= 0 ? drawIdx : f_hlBest(cfg, dir, float(na), tol, refPx)
+    int secondIndex = perSide > 1 and first >= 0 ? f_hlBest(cfg, dir, array.get(cfg.hls, first).price, tol, refPx) : -1
+    [first, secondIndex]
+
+//@function Nearby owners merge in the label only (whole-name keys): HTF1 swings within tol, HTF2 swings within tol2. Returns the name, the earliest HTF1 owner bar and whether one owner is the TTrades DOL.
+export f_hlCluster(PDConfig cfg, int seed, float tol, float tol2, float dolPx, int dolDir) =>
+    string out = ""
+    int fromBar = na
+    bool dol = false
+    if seed >= 0 and seed < array.size(cfg.hls)
+        HLvl s = array.get(cfg.hls, seed)
+        out := s.name
+        fromBar := s.bornBar
+        dol := not na(dolPx) and s.dir == dolDir and math.abs(s.price - dolPx) < cfg.tick * 0.5
+        int n = array.size(cfg.hls)
+        for i = 0 to n - 1
+            if i != seed
+                HLvl l = array.get(cfg.hls, i)
+                if l.state == 0 and l.dir == s.dir and math.abs(l.price - s.price) <= (l.src == 1 ? tol : tol2)
+                    if not str.contains(" + " + out + " + ", " + " + l.name + " + ")
+                        out += " + " + l.name
+                    if l.src == 1
+                        fromBar := math.min(fromBar, l.bornBar)
+                    dol := dol or (not na(dolPx) and l.dir == dolDir and math.abs(l.price - dolPx) < cfg.tick * 0.5)
+    [out, fromBar, dol]
+
+//@function Only a live HTF1 pool can anchor a key area's H/L relation (HTF2 names join by the usual H/L rule): bullish gap below / around SSL, bearish gap above / around BSL. No remote confluence.
+export f_pfHL(PDConfig cfg, PFGroup g, float tol) =>
+    int best = -1
+    float bestD = na
+    PFvg z = g.owner
+    if array.size(cfg.hls) > 0
+        for i = 0 to array.size(cfg.hls) - 1
+            HLvl l = array.get(cfg.hls, i)
+            int d = f_pfDir(z)
+            bool beyond = d == 1 ? l.price >= z.bot : l.price <= z.top
+            float dist = math.max(0.0, d == 1 ? l.price - z.top : z.bot - l.price)
+            if l.src == 1 and l.state == 0 and l.dir == -d and beyond and dist <= tol and (na(bestD) or dist < bestD)
+                best := i
+                bestD := dist
+    best
+
+//@function Distance from the close to a key area (0 inside it).
+export f_pfDist(PFvg z) => math.max(0.0, math.max(z.bot - close, close - z.top))
+
+//@function Side a key area occupies for the display budget: 1 support, -1 resistance; a zone containing price takes the side opposite its polarity.
+export f_pfSide(PFvg z) => close < z.bot ? 1 : close > z.top ? -1 : -f_pfDir(z)
+
+//@function Nearest eligible key-area group. A nearby H/L relation breaks an equal-distance tie; Core's deterministic ordering then prefers the higher source / fresher formation.
+export f_pfBest(PDConfig cfg, array<PFGroup> groups, array<int> picks, int side, float maxDist, float hlTol) =>
+    int best = -1
+    float bestD = na
+    bool bestHL = false
+    if array.size(groups) > 0
+        for i = 0 to array.size(groups) - 1
+            PFGroup g = array.get(groups, i)
+            float dist = f_pfDist(g.owner)
+            bool nearHL = f_pfHL(cfg, g, hlTol) >= 0
+            bool eligible = not array.includes(picks, i) and dist <= maxDist and (side == 0 or f_pfSide(g.owner) == side)
+            if eligible and (na(bestD) or dist < bestD - cfg.tick * 0.5 or (math.abs(dist - bestD) < cfg.tick * 0.5 and nearHL and not bestHL))
+                best := i
+                bestD := dist
+                bestHL := nearHL
+    best
+
+//@function Key-area groups to draw: exact live draw targets first (even beyond the distance window), then the other side, then the nearest, up to the budget (hard maximum four).
+export f_pfPicks(PDConfig cfg, array<PFGroup> groups, array<string> pins, int budget, float maxDist, float hlTol) =>
+    array<int> picks = array.new_int()
+    for key in pins
+        if array.size(groups) > 0
+            for i = 0 to array.size(groups) - 1
+                if f_pfHas(array.get(groups, i), key) and not array.includes(picks, i)
+                    array.push(picks, i)
+                    break
+    int cap = math.min(4, math.max(budget, array.size(picks)))
+    if array.size(picks) == 0
+        int nearest = f_pfBest(cfg, groups, picks, 0, maxDist, hlTol)
+        if nearest >= 0
+            array.push(picks, nearest)
+    for pass = 0 to 1
+        int side = pass == 0 ? -1 : 1
+        bool covered = false
+        for idx in picks
+            covered := covered or f_pfSide(array.get(groups, idx).owner) == side
+        if not covered and array.size(picks) < cap
+            int idx = f_pfBest(cfg, groups, picks, side, maxDist, hlTol)
+            if idx >= 0
+                array.push(picks, idx)
+    while array.size(picks) < cap
+        int idx = f_pfBest(cfg, groups, picks, 0, maxDist, hlTol)
+        if idx < 0
+            break
+        array.push(picks, idx)
+    picks
+
+
+// Side-label layout is display-only: price levels and engine anchors never move.
+export type SideTag
+    label id
+    float price
+    int fromX
+
+//@function Queue visible side labels after their owning renderer restores native coordinates.
+export f_sideCollect(array<SideTag> tags, array<label> ids) =>
+    for id in ids
+        if not na(id) and label.get_text(id) != "" and not na(label.get_y(id))
+            array.push(tags, SideTag.new(id, label.get_y(id), label.get_x(id) - 1))
+    true
+
+//@function Separate nearby captions with minimum movement, preserving their price order.
+export f_sideLayout(array<SideTag> tags, array<line> leaders, bool enabled, int x, float baseSpacing, float scale, color ink, string sz) =>
+    while array.size(leaders) > 0
+        line.delete(array.pop(leaders))
+    int n = array.size(tags)
+    if enabled and n > 0
+        array<float> prices = array.new_float()
+        for tag in tags
+            array.push(prices, tag.price)
+        float spacing = math.max(baseSpacing, (array.max(prices) - array.min(prices)) / 36.0) * scale
+        array<int> orderIx = array.sort_indices(prices, order.ascending)
+        // Pool adjacent violations after subtracting the required row spacing.
+        // Each pooled block stays centred on its real levels; isolated labels stay put.
+        array<float> means = array.new_float()
+        array<int> counts = array.new_int()
+        for i = 0 to n - 1
+            array.push(means, array.get(prices, array.get(orderIx, i)) - i * spacing)
+            array.push(counts, 1)
+            while array.size(means) > 1
+                int last = array.size(means) - 1
+                float hiMean = array.get(means, last)
+                float loMean = array.get(means, last - 1)
+                if loMean <= hiMean
+                    break
+                int hiCount = array.pop(counts)
+                int loCount = array.pop(counts)
+                array.pop(means)
+                array.pop(means)
+                array.push(means, (loMean * loCount + hiMean * hiCount) / (loCount + hiCount))
+                array.push(counts, loCount + hiCount)
+        int row = 0
+        for block = 0 to array.size(means) - 1
+            for member = 1 to array.get(counts, block)
+                SideTag tag = array.get(tags, array.get(orderIx, row))
+                float y = array.get(means, block) + row * spacing
+                label.set_xy(tag.id, x, y)
+                label.set_size(tag.id, sz)
+                label.set_textalign(tag.id, text.align_left)
+                if math.abs(y - tag.price) > syminfo.mintick * 0.1
+                    array.push(leaders, f_newLine(math.min(tag.fromX, x - 3), tag.price, x - 1, y, color.new(ink, 55), line.style_dotted, 1, false))
+                row += 1
+    true

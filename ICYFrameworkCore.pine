@@ -1,7 +1,11 @@
 //@version=6
-//@description Shared PD response, CISD and drawing engine for ICY x ICT22 Framework v1.1.15 (Core v1.0.8). Publish privately as ICYFrameworkCore (as a new version if an earlier Core is already published) before importing it into the main indicator.
+//@description Shared PD response, CISD and drawing engine for ICY x ICT22 Framework v1.1.17 (Core v1.0.9). Publish privately as ICYFrameworkCore (as a new version if an earlier Core is already published) before importing it into the main indicator.
 library("ICYFrameworkCore", overlay = true)
 
+// Core v1.0.9 (review cleanup, for Framework v1.1.17)
+//   * Removed the unused f_closure export. No other export, type or behaviour changes.
+//   * Function docs describe each helper instead of the generic "Shared Framework" text.
+//   * Framework v1.1.17 also runs on Core v1.0.8, so publishing this version is optional.
 // Core v1.0.8 (HTF inversion lifecycle and side-label layout, for Framework v1.1.15)
 //   * HTF key gaps invert once on a completed owner close; the inverse can then fail.
 //   * Original geometry/identity retained; inverse DRAW pins and grouping are distinct.
@@ -292,35 +296,35 @@ export type CMapState
     int i_cisdSwingN
     int i_cisdKeep
 
-//@function Shared Framework f_size implementation.
+//@function Label size from a "Tiny" / "Small" / "Normal" setting (anything else is small).
 export f_size(string s) =>
     s == "Tiny" ? size.tiny : s == "Normal" ? size.normal : size.small
 
-//@function Shared Framework f_pos implementation.
+//@function Table position from a "Top Right" / "Bottom Right" / "Top Left" / "Bottom Left" setting.
 export f_pos(string s) =>
     s == "Top Right" ? position.top_right : s == "Bottom Right" ? position.bottom_right : s == "Top Left" ? position.top_left : position.bottom_left
 
-//@function Shared Framework f_tfLbl implementation.
+//@function Compact timeframe caption (30s, 15m, 4H, 90m, 1D, 1W, 3M); non-integral hours keep their minute count.
 export f_tfLbl(simple string tf) =>
     int s = timeframe.in_seconds(tf)
     s < 60 ? str.tostring(s) + "s" : s < 3600 ? str.tostring(math.round(s / 60.0)) + "m" : s < 86400 ? (s % 3600 == 0 ? str.tostring(math.round(s / 3600.0)) + "H" : str.tostring(math.round(s / 60.0)) + "m") : s < 604800 ? str.tostring(math.round(s / 86400.0)) + "D" : s < 2592000 ? str.tostring(math.round(s / 604800.0)) + "W" : str.tostring(math.round(s / 2628000.0)) + "M"
 
-//@function Shared Framework f_past implementation.
+//@function Clamp a bar_index anchor inside the drawable history buffer (RE10143 guard); na passes through.
 export f_past(int x) => na(x) ? x : math.max(x, bar_index - 4990)
 
-//@function Shared Framework f_newLine implementation.
+//@function New line on the main chart pane, anchored by bar time or bar index.
 export f_newLine(int x1, float y1, int x2, float y2, color ink, string style, int width, bool byTime) =>
     line.new(x1, y1, x2, y2, xloc = byTime ? xloc.bar_time : xloc.bar_index, color = ink, style = style, width = width, force_overlay = true)
 
-//@function Shared Framework f_newLabel implementation.
+//@function New label on the main chart pane; mono selects the monospace font.
 export f_newLabel(int x, float y, string caption, string style, color fill, color ink, string sz, string tip, bool mono) =>
     label.new(x, y, caption, style = style, color = fill, textcolor = ink, size = sz, tooltip = tip, text_font_family = mono ? font.family_monospace : font.family_default, force_overlay = true)
 
-//@function Shared Framework f_newBox implementation.
+//@function New box on the main chart pane with a tiny left-aligned caption at its top or centre.
 export f_newBox(int x1, float top, int x2, float bot, color border, color fill, string style, bool byTime, string caption, color ink, bool atTop, bool mono) =>
     box.new(x1, top, x2, bot, xloc = byTime ? xloc.bar_time : xloc.bar_index, border_color = border, bgcolor = fill, border_width = 1, border_style = style, text = caption, text_size = size.tiny, text_color = ink, text_halign = text.align_left, text_valign = atTop ? text.align_top : text.align_center, text_font_family = mono ? font.family_monospace : font.family_default, force_overlay = true)
 
-//@function Shared Framework f_line implementation.
+//@function Create the bar-index line, or move and restyle the existing one.
 export f_line(line id, int x1, float y1, int x2, float y2, color col, string sty, int w) =>
     line out = id
     if na(out)
@@ -333,7 +337,7 @@ export f_line(line id, int x1, float y1, int x2, float y2, color col, string sty
         line.set_width(out, w)
     out
 
-//@function Shared Framework f_label implementation.
+//@function Create a transparent monospace label, or move and restyle the existing one.
 export f_label(label id, int x, float y, string txt, color col, string sty, string sz) =>
     label out = id
     if na(out)
@@ -346,58 +350,47 @@ export f_label(label id, int x, float y, string txt, color col, string sty, stri
         label.set_size(out, sz)
     out
 
-//@function Shared Framework f_hideLine implementation.
+//@function Delete the line if present; returns na for the caller's slot.
 export f_hideLine(line id) =>
     line out = na
     if not na(id)
         line.delete(id)
     out
 
-//@function Shared Framework f_hideLabel implementation.
+//@function Delete the label if present; returns na for the caller's slot.
 export f_hideLabel(label id) =>
     label out = na
     if not na(id)
         label.delete(id)
     out
 
-//@function Shared Framework f_hideBox implementation.
+//@function Delete the box if present; returns na for the caller's slot.
 export f_hideBox(box id) =>
     box out = na
     if not na(id)
         box.delete(id)
     out
 
-//@function Shared Framework f_bodyDir implementation.
+//@function Candle body direction: 1 bullish, -1 bearish, 0 doji.
 export f_bodyDir(float o, float c) => c > o ? 1 : c < o ? -1 : 0
 
-//@function Shared Framework f_c2 implementation.
+//@function TTrades C2 reversal closure of candle b against candle a: dir 1 sweeps a's low and closes back inside a; dir -1 mirrors it.
 export f_c2(int dir, float aH, float aL, float bH, float bL, float bC) =>
     dir == 1 ? (bL < aL and bH <= aH and bC > aL and bC < aH) : (bH > aH and bL >= aL and bC < aH and bC > aL)
 
-//@function Shared Framework f_c3 implementation.
+//@function TTrades C3 closure: C2 (p) swept C1 (a) and closed beyond it; C3 (b) keeps the C2 extreme and closes back beyond the C2 body and inside C1.
 export f_c3(int dir, float aH, float aL, float pO, float pH, float pL, float pC, float bH, float bL, float bC) =>
     dir == 1 ? (pL < aL and pH <= aH and pC <= aL and bL > pL and bC > math.max(pO, pC) and bC > aL) : (pH > aH and pL >= aL and pC >= aH and bH < pH and bC < math.min(pO, pC) and bC < aH)
 
-//@function Shared Framework f_closure implementation.
-export f_closure(float aH, float aL, float bH, float bL, float bC) =>
-    string r = ""
-    if bL < aL and bC < aL
-        r := "CONT"
-    else if bH > aH and bC > aH
-        r := "CONT"
-    else if (bL < aL and bC > aL) or (bH > aH and bC < aH)
-        r := "REV"
-    r
-
-//@function Shared Framework f_newCMap implementation.
+//@function New CISD+ map stream (si 0 chart, 1-2 ladder frames) with empty candle buffers.
 export f_newCMap(int src, string tag, bool enabled) =>
     CMapStrm.new(si = src, tag = tag, act = enabled, O = array.new_float(), H = array.new_float(), L = array.new_float(), C = array.new_float(), SB = array.new_int())
 
-//@function Shared Framework f_newPDStream implementation.
+//@function New PD response stream (src 0 chart, 1 HTF1, 2 HTF2) with empty array and bar buffers.
 export f_newPDStream(int src, string tag) =>
     PDStream.new(src, tag, array.new<PDArr>(), array.new<PDBar>())
 
-//@function Shared Framework f_addHL implementation.
+//@function Register a swing level, newest first; the list keeps the 80 newest levels.
 export f_addHL(PDConfig cfg, float price, int dir, string name, int bornBar, int src) =>
     if not na(price)
         array.unshift(cfg.hls, HLvl.new(price, dir, name, bornBar, 0, src))
@@ -405,10 +398,10 @@ export f_addHL(PDConfig cfg, float price, int dir, string name, int bornBar, int
             array.pop(cfg.hls)
     true
 
-//@function Shared Framework f_swingHi implementation.
+//@function 3-candle swing high on the middle candle: strict against the left neighbour, inclusive against the right, so the first of an equal pair owns the level.
 export f_swingHi(float lH, float mH, float rH) => mH > lH and mH >= rH
 
-//@function Shared Framework f_swingLo implementation.
+//@function 3-candle swing low on the middle candle: strict against the left neighbour, inclusive against the right, so the first of an equal pair owns the level.
 export f_swingLo(float lL, float mL, float rL) => mL < lL and mL <= rL
 
 //@function Current polarity, without changing the original gap's direction or identity.
@@ -511,15 +504,15 @@ export f_pfGroups(array<PFvg> zones, bool keepTapped, array<string> pins) =>
             array.push(groups, PFGroup.new(next, members, next.top, next.bot, next.t0))
     groups
 
-//@function Shared Framework f_pdState implementation.
+//@function Lifecycle caption for a PD array state: 0 fresh, 1 testing, 2 reject?, 3 held, 4 failed, 5 expired.
 export f_pdState(int st) =>
     st == 0 ? "fresh" : st == 1 ? "testing" : st == 2 ? "reject?" : st == 3 ? "held" : st == 4 ? "failed" : "expired"
 
-//@function Shared Framework f_pdRecent implementation.
+//@function Whether a source-candle event sequence is inside the response relevance window.
 export f_pdRecent(PDConfig cfg, PDStream s, int at) =>
     not na(at) and s.seq - at <= cfg.i_pdFlowAge
 
-//@function Shared Framework f_pdById implementation.
+//@function PD array with this id in the stream, or na.
 export f_pdById(PDStream s, int id) =>
     PDArr found = na
     if id != 0
@@ -529,12 +522,12 @@ export f_pdById(PDStream s, int id) =>
                 break
     found
 
-//@function Shared Framework f_pdEventAlive implementation.
+//@function Whether a recorded hold / fail array still belongs to the current range context, keeps that state and is recent.
 export f_pdEventAlive(PDConfig cfg, PDStream s, int id, bool held) =>
     PDArr a = f_pdById(s, id)
     not na(a) and a.eventContext == s.rangeN and (held ? a.state == 3 : a.state == 4) and f_pdRecent(cfg, s, a.eventSeq)
 
-//@function Shared Framework f_pdChain implementation.
+//@function Advance the ordered OB -> breaker -> BPR -> FVG study chain on the array's side.
 export f_pdChain(PDConfig cfg, PDStream s, PDArr a) =>
     if cfg.i_pdChain
         int d = a.kind == "OB" ? -a.dir : a.dir
@@ -564,7 +557,7 @@ export f_pdChain(PDConfig cfg, PDStream s, PDArr a) =>
             s.chainSOb := ob
     true
 
-//@function Shared Framework f_pdAdd implementation.
+//@function Register a PD array once (an exact formation match returns the existing one), fix its HTF context owner and advance the chain study.
 export f_pdAdd(PDConfig cfg, PDStream s, string kind, int d, float top, float bot, int origin, int impulse, int parentId, bool sib, float mt, int pairOrigin = na) =>
     PDArr out = na
     if not na(top) and not na(bot) and top >= bot
@@ -598,7 +591,7 @@ export f_pdAdd(PDConfig cfg, PDStream s, string kind, int d, float top, float bo
             f_pdChain(cfg, s, out)
     out
 
-//@function Shared Framework f_pdRecord implementation.
+//@function Record a hold or failure event on the stream and pulse it for alerts.
 export f_pdRecord(PDStream s, PDArr a, bool held) =>
     a.eventSeq := s.seq
     a.eventContext := s.rangeN
@@ -689,7 +682,7 @@ export f_pdBreakerSeed(PDConfig cfg, PDStream s, PDArr a, PDBar ob, int obSeq, P
             a.poolId := 0
     true
 
-//@function Shared Framework f_pdResponse implementation.
+//@function One completed source candle against an array: touch, rejection, hold, failure or expiry; a failure spawns its role-flip child.
 export f_pdResponse(PDConfig cfg, PDStream s, PDArr a, PDBar b, bool cisdNow) =>
     if a.state < 4 and s.seq > a.bornSeq
         f_pdBreakerEvidence(cfg, s, a, b)
@@ -748,7 +741,7 @@ export f_pdResponse(PDConfig cfg, PDStream s, PDArr a, PDBar b, bool cisdNow) =>
                 a.state := 5
     true
 
-//@function Shared Framework f_pdResetContext implementation.
+//@function Clear hold / fail events, chain and continuation when a new dealing range locks.
 export f_pdResetContext(PDStream s) =>
     s.holdB := na
     s.holdS := na
@@ -767,7 +760,7 @@ export f_pdResetContext(PDStream s) =>
     s.contBar := na
     true
 
-//@function Shared Framework f_pdFlow implementation.
+//@function Order flow (1 bull, -1 bear, 2 range, 3 mixed) and causal continuation from recent hold / fail events.
 export f_pdFlow(PDConfig cfg, PDStream s) =>
     bool hb = f_pdEventAlive(cfg, s, s.holdBId, true)
     bool hs = f_pdEventAlive(cfg, s, s.holdSId, true)
@@ -793,7 +786,7 @@ export f_pdFlow(PDConfig cfg, PDStream s) =>
         s.chainSOb := 0
     true
 
-//@function Shared Framework f_pdGap implementation.
+//@function Register an FVG and, when enabled, the BPR it forms with the newest recent opposite FVG.
 export f_pdGap(PDConfig cfg, PDStream s, int d, float top, float bot, int origin, bool sib) =>
     int priorN = array.size(s.A)
     PDArr made = f_pdAdd(cfg, s, "FVG", d, top, bot, origin, s.impulse, 0, sib, na)
@@ -808,7 +801,7 @@ export f_pdGap(PDConfig cfg, PDStream s, int d, float top, float bot, int origin
                     break
     true
 
-//@function Shared Framework f_pdStep implementation.
+//@function Advance a PD stream by one completed source candle: CISD, swings, dealing range, C-sequence, responses and new arrays.
 export f_pdStep(PDConfig cfg, PDStream s, PDBar b) =>
     if not na(b.t) and (na(s.lastT) or b.t > s.lastT)
         s.lastT := b.t
@@ -1031,7 +1024,7 @@ export f_pdStep(PDConfig cfg, PDStream s, PDBar b) =>
         f_pdFlow(cfg, s)
     true
 
-//@function Shared Framework f_pdNear implementation.
+//@function Nearest live array of direction d relative to refPx (the opposing side when opposite); onlySrc < 0 searches every enabled stream.
 export f_pdNear(PDConfig cfg, int d, float refPx, bool opposite, int onlySrc) =>
     PDArr found = na
     float best = na
@@ -1048,7 +1041,7 @@ export f_pdNear(PDConfig cfg, int d, float refPx, bool opposite, int onlySrc) =>
                         best := dist
     found
 
-//@function Shared Framework f_pdEntry implementation.
+//@function Nearest live chart-stream entry array of direction d known since afterBar, measured at its proximal edge or C.E. / MT.
 export f_pdEntry(PDConfig cfg, int d, int afterBar, bool onlyFvg) =>
     PDArr found = na
     float distance = na
@@ -1062,16 +1055,16 @@ export f_pdEntry(PDConfig cfg, int d, int afterBar, bool onlyFvg) =>
                 distance := dd
     found
 
-//@function Shared Framework f_pdName implementation.
+//@function Array caption: stream tag, polarity and kind; a breaker without recorded evidence reads OB flip.
 export f_pdName(PDConfig cfg, PDArr a) =>
     na(a) ? "—" : array.get(cfg.pdStreams, a.src).tag + " " + (a.dir == 1 ? "+" : "-") + (a.kind == "BB" and na(a.breakerKnown) ? "OB flip" : a.kind)
 
-//@function Shared Framework f_pdRangeLoc implementation.
+//@function Location of a zone against the stream's locked dealing range.
 export f_pdRangeLoc(PDStream s, float top, float bot) =>
     float eq = (s.rangeHi + s.rangeLo) / 2
     na(eq) ? "range pending" : bot > s.rangeHi ? "above range" : top < s.rangeLo ? "below range" : bot < eq and top > eq ? "straddles EQ" : top < eq ? "discount" : bot > eq ? "premium" : "at EQ"
 
-//@function Shared Framework f_pdCounts implementation.
+//@function Live recent arrays of direction d: raw feature count and unique impulse groups.
 export f_pdCounts(PDConfig cfg, int d) =>
     int raw = 0
     array<int> keys = array.new_int()
@@ -1086,28 +1079,28 @@ export f_pdCounts(PDConfig cfg, int d) =>
                         array.push(keys, key)
     [raw, array.size(keys)]
 
-//@function Shared Framework f_cmX implementation.
+//@function Buffer index of stream candle sequence q.
 export f_cmX(CMapStrm s, int q) => array.size(s.O) - 1 - (s.seq - q)
 
-//@function Shared Framework f_cmOld implementation.
+//@function Oldest stream candle sequence still buffered.
 export f_cmOld(CMapStrm s) => s.seq - array.size(s.O) + 1
 
-//@function Shared Framework f_cmO implementation.
+//@function Open of stream candle q.
 export f_cmO(CMapStrm s, int q) => array.get(s.O, f_cmX(s, q))
 
-//@function Shared Framework f_cmH implementation.
+//@function High of stream candle q.
 export f_cmH(CMapStrm s, int q) => array.get(s.H, f_cmX(s, q))
 
-//@function Shared Framework f_cmL implementation.
+//@function Low of stream candle q.
 export f_cmL(CMapStrm s, int q) => array.get(s.L, f_cmX(s, q))
 
-//@function Shared Framework f_cmC implementation.
+//@function Close of stream candle q.
 export f_cmC(CMapStrm s, int q) => array.get(s.C, f_cmX(s, q))
 
-//@function Shared Framework f_cmB implementation.
+//@function First chart bar of stream candle q.
 export f_cmB(CMapStrm s, int q) => array.get(s.SB, f_cmX(s, q))
 
-//@function Shared Framework f_cmFlags implementation.
+//@function Which array kinds (OB, FVG, IFVG, BPR) a CISD+ entry owns.
 export f_cmFlags(CMapState reg, int cid) =>
     bool hO = false
     bool hF = false
@@ -1125,7 +1118,7 @@ export f_cmFlags(CMapState reg, int cid) =>
                 hB := true
     [hO, hF, hI, hB]
 
-//@function Shared Framework f_cmTagTxt implementation.
+//@function Compact array tag for a CISD+ caption: IFVG·FVG·BPR, else OB.
 export f_cmTagTxt(bool hO, bool hF, bool hI, bool hB) =>
     string t = hI ? "IFVG" : ""
     if hF
@@ -1136,7 +1129,7 @@ export f_cmTagTxt(bool hO, bool hF, bool hI, bool hB) =>
         t := "OB"
     t
 
-//@function Shared Framework f_cmAlive implementation.
+//@function Whether the CISD+ entry is still registered.
 export f_cmAlive(CMapState reg, int cid) =>
     bool ok = false
     for c in reg.cMapCises
@@ -1144,7 +1137,7 @@ export f_cmAlive(CMapState reg, int cid) =>
             ok := true
     ok
 
-//@function Shared Framework f_cmDrop implementation.
+//@function Remove a CISD+ entry and every array it owns.
 export f_cmDrop(CMapState reg, int ix) =>
     CMapCis c = array.get(reg.cMapCises, ix)
     int n = array.size(reg.cMapArrs)
@@ -1156,13 +1149,13 @@ export f_cmDrop(CMapState reg, int ix) =>
     array.remove(reg.cMapCises, ix)
     0
 
-//@function Shared Framework f_cmAddArr implementation.
+//@function Attach an array to a CISD+ entry when its bounds are valid.
 export f_cmAddArr(CMapState reg, int cid, CMapStrm s, int d, int kd, float top, float bot) =>
     if top > bot
         array.push(reg.cMapArrs, CMapArr.new(cid, d, kd, s.si, top, bot))
     0
 
-//@function Shared Framework f_cmLeg implementation.
+//@function Map the CISD leg FVG and its widest BPR overlap one stream candle after the CISD.
 export f_cmLeg(CMapState reg, CMapStrm s, int d, int K, int e, int i0, int cid) =>
     int old = f_cmOld(s)
     int jLo = math.max(e, old + 1)
@@ -1196,7 +1189,7 @@ export f_cmLeg(CMapState reg, CMapStrm s, int d, int K, int e, int i0, int cid) 
             f_cmAddArr(reg, cid, s, d, 4, pHi, pLo)
     0
 
-//@function Shared Framework f_cmCisd implementation.
+//@function Register a CISD+ entry at the run open when its extreme is a swing (tested entries are trimmed first), then map its OB and IFVG.
 export f_cmCisd(CMapState reg, CMapStrm s, int d) =>
     int k = s.seq
     int i0 = d == 1 ? s.dnSeq : s.upSeq
@@ -1273,7 +1266,7 @@ export f_cmCisd(CMapState reg, CMapStrm s, int d) =>
                 s.pSC := cid
     0
 
-//@function Shared Framework f_cmClose implementation.
+//@function Close one stream candle: buffer it, test entries, drop failed arrays, map the pending leg and detect new CISDs.
 export f_cmClose(CMapState reg, CMapStrm s) =>
     s.live := false
     s.seq += 1
@@ -1340,7 +1333,7 @@ export f_cmClose(CMapState reg, CMapStrm s) =>
             f_cmCisd(reg, s, d)
     0
 
-//@function Shared Framework f_cmBar implementation.
+//@function Feed one confirmed chart bar into a CISD+ stream: close the stream candle on a new candle or at its end, then build the forming one.
 export f_cmBar(CMapState reg, CMapStrm s, bool isNew, bool isEnd) =>
     for pass = 0 to 1
         if pass == 0 ? isNew and s.live : isEnd
@@ -1358,7 +1351,7 @@ export f_cmBar(CMapState reg, CMapStrm s, bool isNew, bool isEnd) =>
             s.fc := close
     0
 
-//@function Shared Framework f_cisdPicks implementation.
+//@function Cluster CISD anchors around parent / ladder owners, then keep parent owners and the nearest others to refPx, perSide per direction.
 export f_cisdPicks(array<CisdK> ks, float tol, float refPx, int perSide) =>
     array<int> owners = array.new_int()
     array<int> picks = array.new_int()
@@ -1413,7 +1406,7 @@ export f_cisdPicks(array<CisdK> ks, float tol, float refPx, int perSide) =>
                     slotsBear += 1
     picks
 
-//@function Shared Framework f_cisdHiddenNarratives implementation.
+//@function Narrative CISDs to hide: those inside a picked owner's cluster, and the older of two overlapping standalone narratives.
 export f_cisdHiddenNarratives(array<CisdK> ks, array<int> picks, float tol) =>
     array<int> hidden = array.new_int()
     for k in ks
